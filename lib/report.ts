@@ -1,7 +1,6 @@
 import type { ComplianceReport, RiskLevel, ScoredTransaction } from "./types";
 
 export const COMPLIANCE_DISCLAIMER =
-  "ClearLedger AI is an MVP compliance-assistance tool. It is not legal advice, does not replace licensed compliance counsel, and does not guarantee regulatory compliance or sanctions-screening completeness.";
   "ClearLedger AI is an MVP compliance-assistance prototype, not legal advice. It does not replace licensed compliance counsel, does not guarantee regulatory compliance, and does not perform live OFAC, UN, EU, UK, or other official sanctions screening. Sanctions/watchlist results come only from local sample placeholder data for demos and tests.";
 
 const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
