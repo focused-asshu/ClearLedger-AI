@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { sampleTransactions } from "@/data/sample-transactions";
-import { parseTransactionsCsv } from "@/lib/csv";
+import { DEFAULT_CSV_UPLOAD_LIMITS, parseTransactionsCsv } from "@/lib/csv";
 import { generateComplianceReport, transactionsToCsv } from "@/lib/report";
 import { scoreTransactions } from "@/lib/risk-scoring";
 import type { RiskLevel, TransactionInput } from "@/lib/types";
@@ -38,11 +38,34 @@ export function DashboardClient() {
         : scoredTransactions.filter((transaction) => transaction.riskLevel === riskFilter),
     [riskFilter, scoredTransactions],
   );
+  const prioritizedAlerts = useMemo(
+    () =>
+      scoredTransactions
+        .filter((transaction) => ["Critical", "High"].includes(transaction.riskLevel))
+        .sort((left, right) => right.riskScore - left.riskScore)
+        .slice(0, 4),
+    [scoredTransactions],
+  );
+  const totalValueFormatted = useMemo(
+    () =>
+      new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0,
+      }).format(report.totalValueUsd),
+    [report.totalValueUsd],
+  );
 
   const handleUpload = async (file: File | undefined) => {
     if (!file) return;
 
     try {
+      if (file.size > DEFAULT_CSV_UPLOAD_LIMITS.maxBytes) {
+        throw new Error(
+          `CSV file is too large. Maximum size is ${DEFAULT_CSV_UPLOAD_LIMITS.maxBytes.toLocaleString()} bytes.`,
+        );
+      }
+
       const csv = await file.text();
       const parsedTransactions = parseTransactionsCsv(csv);
       setTransactions(parsedTransactions);
@@ -73,14 +96,55 @@ export function DashboardClient() {
 
         <section className="grid gap-4 md:grid-cols-4">
           {riskLevels.map((level) => (
-            <div key={level} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <button
+              key={level}
+              onClick={() => setRiskFilter(level)}
+              className="rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-300 hover:shadow-md"
+            >
               <div className="flex items-center justify-between">
                 <RiskBadge level={level} />
                 <span className="text-2xl font-bold text-slate-950">{report.riskSummary[level]}</span>
               </div>
               <p className="mt-3 text-sm text-slate-500">{level} transactions in current dataset</p>
-            </div>
+            </button>
           ))}
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-[1fr_1.4fr]">
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-950">Risk overview</h2>
+            <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-2xl bg-slate-50 p-4">
+                <dt className="text-slate-500">Screened value</dt>
+                <dd className="mt-1 text-lg font-bold text-slate-950">{totalValueFormatted}</dd>
+              </div>
+              <div className="rounded-2xl bg-red-50 p-4">
+                <dt className="text-red-700">Critical workflow</dt>
+                <dd className="mt-1 text-lg font-bold text-red-950">{report.riskSummary.Critical} immediate reviews</dd>
+              </div>
+            </dl>
+            <p className="mt-4 text-xs leading-5 text-slate-500">
+              Critical and High items should be reviewed first. This MVP remains compliance assistance only and uses local sample watchlist data.
+            </p>
+          </div>
+          <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-950">Prioritized alerts</h2>
+            {prioritizedAlerts.length === 0 ? (
+              <p className="mt-3 text-sm text-slate-500">No High or Critical alerts in the current dataset.</p>
+            ) : (
+              <ol className="mt-4 space-y-3">
+                {prioritizedAlerts.map((transaction) => (
+                  <li key={transaction.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-semibold text-slate-950">{transaction.id}</span>
+                      <RiskBadge level={transaction.riskLevel} />
+                    </div>
+                    <p className="mt-1 text-xs text-slate-600">{transaction.riskBreakdown.calculation}</p>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
         </section>
 
         <section className="grid gap-6 lg:grid-cols-[1fr_340px]">
@@ -113,7 +177,7 @@ export function DashboardClient() {
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-950">CSV upload</h2>
               <p className="mt-2 text-sm text-slate-500">
-                Required headers: id, date, customerName, customerCountry, walletAddress, counterpartyName, counterpartyCountry, asset, amount, fiatValueUsd, direction.
+                Required headers: id, date, customerName, customerCountry, walletAddress, counterpartyName, counterpartyCountry, asset, amount, fiatValueUsd, direction. Upload limit: {DEFAULT_CSV_UPLOAD_LIMITS.maxRows.toLocaleString()} rows / {DEFAULT_CSV_UPLOAD_LIMITS.maxBytes.toLocaleString()} bytes.
               </p>
               <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600 hover:border-cyan-400 hover:bg-cyan-50">
                 <span className="font-semibold text-slate-800">Choose CSV file</span>
@@ -160,7 +224,7 @@ export function DashboardClient() {
             <div className="rounded-3xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-950">MVP data status</h2>
               <ul className="mt-3 list-disc space-y-2 pl-5">
-                <li>Risk engine uses transparent mock rules for demo and tests.</li>
+                <li>Risk engine uses transparent progressive amount ranges and category-level score breakdowns.</li>
                 <li>Sanctions screening uses local sample data only.</li>
                 <li>Sanctions screening uses local sample placeholder data only; it is not connected to OFAC, UN, EU, UK, or any live sanctions/watchlist source.</li>
                 <li>Supabase schema is drafted for next milestone persistence and auth.</li>

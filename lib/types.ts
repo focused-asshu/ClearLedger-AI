@@ -2,6 +2,14 @@ export type RiskLevel = "Low" | "Medium" | "High" | "Critical";
 
 export type TransactionStatus = "pending" | "cleared" | "flagged" | "reported";
 
+export type RiskContributionCategory =
+  | "amount"
+  | "jurisdiction"
+  | "structuring"
+  | "direction"
+  | "watchlist"
+  | "other";
+
 export interface TransactionInput {
   id: string;
   date: string;
@@ -30,12 +38,26 @@ export interface RiskFactor {
   label: string;
   points: number;
   severity: RiskLevel;
+  category: RiskContributionCategory;
+}
+
+export interface RiskBreakdown {
+  amount: number;
+  jurisdiction: number;
+  structuring: number;
+  direction: number;
+  watchlist: number;
+  other: number;
+  totalBeforeCap: number;
+  cappedTotal: number;
+  calculation: string;
 }
 
 export interface ScoredTransaction extends TransactionInput {
   riskScore: number;
   riskLevel: RiskLevel;
   riskFactors: RiskFactor[];
+  riskBreakdown: RiskBreakdown;
   sanctionsHits: SanctionsHit[];
 }
 
