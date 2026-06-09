@@ -27,8 +27,13 @@ export function generateComplianceReport(
   };
 }
 
-const csvEscape = (value: string | number) => {
+export const sanitizeCsvCell = (value: string | number) => {
   const stringValue = String(value);
+  return /^[=+\-@]/.test(stringValue.trim()) ? `'${stringValue}` : stringValue;
+};
+
+const csvEscape = (value: string | number) => {
+  const stringValue = sanitizeCsvCell(value);
   return /[",\n]/.test(stringValue) ? `"${stringValue.replaceAll('"', '""')}"` : stringValue;
 };
 
@@ -47,6 +52,13 @@ export function transactionsToCsv(transactions: ScoredTransaction[]): string {
     "riskScore",
     "riskLevel",
     "status",
+    "amountContribution",
+    "jurisdictionContribution",
+    "structuringContribution",
+    "directionContribution",
+    "watchlistContribution",
+    "otherContribution",
+    "riskCalculation",
     "riskFactors",
     "sanctionsHits",
   ];
@@ -66,7 +78,14 @@ export function transactionsToCsv(transactions: ScoredTransaction[]): string {
       transaction.riskScore,
       transaction.riskLevel,
       transaction.status ?? "pending",
-      transaction.riskFactors.map((factor) => factor.code).join(";"),
+      transaction.riskBreakdown.amount,
+      transaction.riskBreakdown.jurisdiction,
+      transaction.riskBreakdown.structuring,
+      transaction.riskBreakdown.direction,
+      transaction.riskBreakdown.watchlist,
+      transaction.riskBreakdown.other,
+      transaction.riskBreakdown.calculation,
+      transaction.riskFactors.map((factor) => `${factor.category}:${factor.code}:${factor.points}`).join(";"),
       transaction.sanctionsHits.map((hit) => `${hit.list}:${hit.matchedField}`).join(";"),
     ].map(csvEscape).join(","),
   );
