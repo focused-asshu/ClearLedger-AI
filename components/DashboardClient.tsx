@@ -12,6 +12,10 @@ import { TransactionTable } from "./TransactionTable";
 
 const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
 const riskFilters: Array<RiskLevel | "All"> = ["All", ...riskLevels];
+type RiskFilter = RiskLevel | "All";
+
+const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
+const riskFilters: RiskFilter[] = ["All", ...riskLevels];
 
 function downloadFile(filename: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType });
@@ -26,6 +30,7 @@ function downloadFile(filename: string, content: string, mimeType: string) {
 export function DashboardClient() {
   const [transactions, setTransactions] = useState<TransactionInput[]>(sampleTransactions);
   const [riskFilter, setRiskFilter] = useState<RiskLevel | "All">("All");
+  const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
   const [uploadMessage, setUploadMessage] = useState("Using included sample transaction data.");
 
   const scoredTransactions = useMemo(() => scoreTransactions(transactions), [transactions]);
@@ -161,6 +166,7 @@ export function DashboardClient() {
               <ul className="mt-3 list-disc space-y-2 pl-5">
                 <li>Risk engine uses transparent mock rules for demo and tests.</li>
                 <li>Sanctions screening uses local sample data only.</li>
+                <li>Sanctions screening uses local sample placeholder data only; it is not connected to OFAC, UN, EU, UK, or any live sanctions/watchlist source.</li>
                 <li>Supabase schema is drafted for next milestone persistence and auth.</li>
               </ul>
             </div>
