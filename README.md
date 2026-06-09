@@ -2,7 +2,7 @@
 
 ClearLedger AI is a B2B SaaS compliance-assistance MVP for small crypto exchanges and fintech startups in India and globally. It accepts transaction data, applies transparent AML-style mock risk rules, checks a local sample sanctions/watchlist placeholder, flags suspicious transactions, and exports compliance review reports.
 
-> **Important:** ClearLedger AI Milestone 1 is a compliance-assistance demo. It is not legal advice, does not replace licensed compliance counsel, and does not guarantee regulatory compliance or sanctions-screening completeness.
+> **Important:** ClearLedger AI Milestone 1 is a compliance-assistance demo, not legal advice. It does not replace licensed compliance counsel, does not guarantee regulatory compliance, and does not perform live OFAC, UN, EU, UK, or other official sanctions screening. Sanctions/watchlist results come only from local sample placeholder data for demos and tests.
 
 ## Milestone 1 scope
 
@@ -78,7 +78,7 @@ Milestone 1 uses transparent deterministic rules in `lib/risk-scoring.ts`:
 - Large outbound transfer checks
 - Privacy-asset checks
 - High-risk/elevated-risk jurisdiction checks
-- Local sanctions/watchlist placeholder hits
+- Local sample sanctions/watchlist placeholder hits only; no live OFAC, UN, EU, UK, or official watchlist lookup is performed
 
 This rules engine is intentionally simple and explainable for founder demos and early customer discovery.
 
