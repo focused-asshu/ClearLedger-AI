@@ -10,6 +10,8 @@ import { DisclaimerBanner } from "./DisclaimerBanner";
 import { RiskBadge } from "./RiskBadge";
 import { TransactionTable } from "./TransactionTable";
 
+const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
+const riskFilters: Array<RiskLevel | "All"> = ["All", ...riskLevels];
 type RiskFilter = RiskLevel | "All";
 
 const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
@@ -27,6 +29,7 @@ function downloadFile(filename: string, content: string, mimeType: string) {
 
 export function DashboardClient() {
   const [transactions, setTransactions] = useState<TransactionInput[]>(sampleTransactions);
+  const [riskFilter, setRiskFilter] = useState<RiskLevel | "All">("All");
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
   const [uploadMessage, setUploadMessage] = useState("Using included sample transaction data.");
 
@@ -162,6 +165,7 @@ export function DashboardClient() {
               <h2 className="text-lg font-semibold text-slate-950">MVP data status</h2>
               <ul className="mt-3 list-disc space-y-2 pl-5">
                 <li>Risk engine uses transparent mock rules for demo and tests.</li>
+                <li>Sanctions screening uses local sample data only.</li>
                 <li>Sanctions screening uses local sample placeholder data only; it is not connected to OFAC, UN, EU, UK, or any live sanctions/watchlist source.</li>
                 <li>Supabase schema is drafted for next milestone persistence and auth.</li>
               </ul>

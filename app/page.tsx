@@ -4,6 +4,7 @@ import { DisclaimerBanner } from "@/components/DisclaimerBanner";
 const features = [
   "CSV transaction upload",
   "Transparent AML-style mock rules",
+  "Local sample sanctions watchlist",
   "Local sample sanctions placeholder only",
   "Low / Medium / High / Critical labels",
   "Downloadable JSON and CSV reports",
@@ -30,6 +31,7 @@ export default function Home() {
               Screen transactions and prepare compliance reports in minutes.
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
+              ClearLedger AI helps small exchanges and fintech startups in India and globally triage AML-style transaction risk, surface watchlist placeholders, and export clean review packets for compliance teams.
               ClearLedger AI helps small exchanges and fintech startups in India and globally triage AML-style transaction risk, surface local sample watchlist placeholders, and export clean review packets for compliance teams.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
