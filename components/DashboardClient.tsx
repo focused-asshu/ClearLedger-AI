@@ -10,7 +10,10 @@ import { DisclaimerBanner } from "./DisclaimerBanner";
 import { RiskBadge } from "./RiskBadge";
 import { TransactionTable } from "./TransactionTable";
 
-const riskFilters: Array<RiskLevel | "All"> = ["All", "Low", "Medium", "High", "Critical"];
+type RiskFilter = RiskLevel | "All";
+
+const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
+const riskFilters: RiskFilter[] = ["All", ...riskLevels];
 
 function downloadFile(filename: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType });
@@ -24,7 +27,7 @@ function downloadFile(filename: string, content: string, mimeType: string) {
 
 export function DashboardClient() {
   const [transactions, setTransactions] = useState<TransactionInput[]>(sampleTransactions);
-  const [riskFilter, setRiskFilter] = useState<RiskLevel | "All">("All");
+  const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
   const [uploadMessage, setUploadMessage] = useState("Using included sample transaction data.");
 
   const scoredTransactions = useMemo(() => scoreTransactions(transactions), [transactions]);
@@ -70,7 +73,7 @@ export function DashboardClient() {
         <DisclaimerBanner />
 
         <section className="grid gap-4 md:grid-cols-4">
-          {riskFilters.slice(1).map((level) => (
+          {riskLevels.map((level) => (
             <div key={level} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between">
                 <RiskBadge level={level} />
@@ -159,7 +162,7 @@ export function DashboardClient() {
               <h2 className="text-lg font-semibold text-slate-950">MVP data status</h2>
               <ul className="mt-3 list-disc space-y-2 pl-5">
                 <li>Risk engine uses transparent mock rules for demo and tests.</li>
-                <li>Sanctions screening uses local sample data only.</li>
+                <li>Sanctions screening uses local sample placeholder data only; it is not connected to OFAC, UN, EU, UK, or any live sanctions/watchlist source.</li>
                 <li>Supabase schema is drafted for next milestone persistence and auth.</li>
               </ul>
             </div>
