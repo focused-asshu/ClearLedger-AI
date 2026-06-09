@@ -11,10 +11,7 @@ import { RiskBadge } from "./RiskBadge";
 import { TransactionTable } from "./TransactionTable";
 
 const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
-const riskFilters: Array<RiskLevel | "All"> = ["All", ...riskLevels];
 type RiskFilter = RiskLevel | "All";
-
-const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
 const riskFilters: RiskFilter[] = ["All", ...riskLevels];
 
 function downloadFile(filename: string, content: string, mimeType: string) {
@@ -29,7 +26,6 @@ function downloadFile(filename: string, content: string, mimeType: string) {
 
 export function DashboardClient() {
   const [transactions, setTransactions] = useState<TransactionInput[]>(sampleTransactions);
-  const [riskFilter, setRiskFilter] = useState<RiskLevel | "All">("All");
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
   const [uploadMessage, setUploadMessage] = useState("Using included sample transaction data.");
 
