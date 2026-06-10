@@ -1,13 +1,40 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardClient } from "@/components/DashboardClient";
+import { scoreTransactions } from "@/lib/risk-scoring";
+import type { PersistentTransaction, TransactionInput } from "@/lib/types";
+
+vi.mock("@/app/auth/actions", () => ({
+  logout: vi.fn(),
+}));
 
 const header = "id,date,customerName,customerCountry,walletAddress,counterpartyName,counterpartyCountry,asset,amount,fiatValueUsd,direction";
 const validRow = "txn1,2026-06-01,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,100,100,outbound";
 
-afterEach(() => cleanup());
+function toPersistent(transactions: TransactionInput[]): PersistentTransaction[] {
+  return scoreTransactions(transactions).map((transaction, index) => ({
+    ...transaction,
+    databaseId: `db-${transaction.id}-${index}`,
+    uploadBatchId: "batch-1",
+    uploadedAt: "2026-06-10T19:00:00Z",
+    reviewed: false,
+    reviewerNote: "",
+  }));
+}
+
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as { transactions?: TransactionInput[] };
+    return new Response(JSON.stringify({ transactions: toPersistent(body.transactions ?? []) }), { status: 200 });
+  }));
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("dashboard CSV upload feedback", () => {
   it("starts empty and only loads sample data when requested", async () => {
@@ -44,7 +71,7 @@ describe("dashboard CSV upload feedback", () => {
     fireEvent.change(input, { target: { files: [file] } });
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("1 rows imported, 1 rows rejected");
+    expect(alert).toHaveTextContent("1 rows imported and saved, 1 rows rejected");
     expect(alert).toHaveTextContent("Row 3, customerName: Missing required value.");
 
     await waitFor(() => expect(screen.getByText("txn1")).toBeInTheDocument());

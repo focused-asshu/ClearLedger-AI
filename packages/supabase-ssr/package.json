@@ -1,0 +1,12 @@
+{
+  "name": "@supabase/ssr",
+  "version": "0.10.3",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.108.0"
+  }
+}

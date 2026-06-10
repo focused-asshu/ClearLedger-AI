@@ -1,18 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { sampleTransactions } from "@/data/sample-transactions";
 import { DEFAULT_CSV_UPLOAD_LIMITS, parseTransactionsCsvWithDiagnostics } from "@/lib/csv";
 import { generateComplianceReport, transactionsToCsv } from "@/lib/report";
-import { scoreTransactions } from "@/lib/risk-scoring";
-import type { RiskLevel, TransactionInput } from "@/lib/types";
+import type { PersistentTransaction, RiskLevel, TransactionInput } from "@/lib/types";
 import { DisclaimerBanner } from "./DisclaimerBanner";
 import { RiskBadge } from "./RiskBadge";
 import { TransactionTable } from "./TransactionTable";
+import { logout } from "@/app/auth/actions";
 
 const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
 type RiskFilter = RiskLevel | "All";
+type ReviewFilter = "All" | "Unreviewed" | "Reviewed";
 const riskFilters: RiskFilter[] = ["All", ...riskLevels];
+const reviewFilters: ReviewFilter[] = ["All", "Unreviewed", "Reviewed"];
 
 function downloadFile(filename: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType });
@@ -24,21 +26,28 @@ function downloadFile(filename: string, content: string, mimeType: string) {
   URL.revokeObjectURL(url);
 }
 
-export function DashboardClient() {
-  const [transactions, setTransactions] = useState<TransactionInput[]>([]);
+export function DashboardClient({ initialTransactions = [], userEmail = "" }: { initialTransactions?: PersistentTransaction[]; userEmail?: string }) {
+  const [transactions, setTransactions] = useState<PersistentTransaction[]>(initialTransactions);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("All");
+  const [isPending, startTransition] = useTransition();
   const [uploadMessage, setUploadMessage] = useState("No transactions loaded. Upload a CSV or load sample data to begin.");
   const [uploadStatus, setUploadStatus] = useState<"info" | "success" | "error">("info");
   const [uploadRowErrors, setUploadRowErrors] = useState<Array<{ rowNumber: number; field: string; reason: string }>>([]);
 
-  const scoredTransactions = useMemo(() => scoreTransactions(transactions), [transactions]);
+  const scoredTransactions = useMemo(() => transactions, [transactions]);
   const report = useMemo(() => generateComplianceReport(scoredTransactions), [scoredTransactions]);
   const filteredTransactions = useMemo(
     () =>
-      riskFilter === "All"
-        ? scoredTransactions
-        : scoredTransactions.filter((transaction) => transaction.riskLevel === riskFilter),
-    [riskFilter, scoredTransactions],
+      scoredTransactions.filter((transaction) => {
+        const matchesRisk = riskFilter === "All" || transaction.riskLevel === riskFilter;
+        const matchesReview =
+          reviewFilter === "All" ||
+          (reviewFilter === "Reviewed" && transaction.reviewed) ||
+          (reviewFilter === "Unreviewed" && !transaction.reviewed);
+        return matchesRisk && matchesReview;
+      }),
+    [riskFilter, reviewFilter, scoredTransactions],
   );
   const prioritizedAlerts = useMemo(
     () =>
@@ -58,12 +67,33 @@ export function DashboardClient() {
     [report.totalValueUsd],
   );
 
-  const handleLoadSampleData = () => {
-    setTransactions(sampleTransactions);
+  const persistScreenedTransactions = async (parsedTransactions: TransactionInput[], sourceName: string) => {
+    const response = await fetch("/api/transactions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transactions: parsedTransactions }),
+    });
+    const payload = (await response.json()) as { transactions?: PersistentTransaction[]; error?: string };
+
+    if (!response.ok || !payload.transactions) {
+      throw new Error(payload.error ?? "Could not save transactions to Supabase.");
+    }
+
+    setTransactions((current) => [...payload.transactions!, ...current].slice(0, 200));
     setRiskFilter("All");
-    setUploadRowErrors([]);
+    setReviewFilter("All");
     setUploadStatus("success");
-    setUploadMessage(`${sampleTransactions.length} sample transactions loaded for demo review.`);
+    setUploadMessage(`${payload.transactions.length} rows screened and saved from ${sourceName}. History keeps the most recent 200 transactions.`);
+  };
+
+  const handleLoadSampleData = () => {
+    setUploadRowErrors([]);
+    startTransition(() => {
+      void persistScreenedTransactions(sampleTransactions, "sample data").catch((error) => {
+        setUploadStatus("error");
+        setUploadMessage(error instanceof Error ? error.message : "Could not save sample transactions.");
+      });
+    });
   };
 
   const handleUpload = async (file: File | undefined) => {
@@ -78,17 +108,48 @@ export function DashboardClient() {
 
       const csv = await file.text();
       const { transactions: parsedTransactions, rejectedRows } = parseTransactionsCsvWithDiagnostics(csv);
-      setTransactions(parsedTransactions);
       setUploadRowErrors(rejectedRows);
-      setUploadStatus(rejectedRows.length > 0 ? "error" : "success");
-      setUploadMessage(
-        `${parsedTransactions.length} rows imported, ${rejectedRows.length} rows rejected from ${file.name}.`,
-      );
+      await persistScreenedTransactions(parsedTransactions, file.name);
+      if (rejectedRows.length > 0) {
+        setUploadStatus("error");
+        setUploadMessage(
+          `${parsedTransactions.length} rows imported and saved, ${rejectedRows.length} rows rejected from ${file.name}.`,
+        );
+      }
     } catch (error) {
       setUploadStatus("error");
       setUploadRowErrors([]);
       setUploadMessage(error instanceof Error ? error.message : "Could not parse CSV file.");
     }
+  };
+
+  const handleReviewedChange = async (databaseId: string, reviewed: boolean) => {
+    setTransactions((current) => current.map((transaction) => transaction.databaseId === databaseId ? { ...transaction, reviewed } : transaction));
+    const response = await fetch(`/api/transactions/${databaseId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reviewed }),
+    });
+    if (!response.ok) {
+      setTransactions((current) => current.map((transaction) => transaction.databaseId === databaseId ? { ...transaction, reviewed: !reviewed } : transaction));
+      setUploadStatus("error");
+      setUploadMessage("Could not update reviewed status. Please retry.");
+    }
+  };
+
+  const handleReviewerNoteSave = async (databaseId: string, reviewerNote: string) => {
+    const response = await fetch(`/api/transactions/${databaseId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reviewerNote }),
+    });
+    const payload = (await response.json()) as { reviewerNote?: string; error?: string };
+    if (!response.ok) {
+      setUploadStatus("error");
+      setUploadMessage(payload.error ?? "Could not save reviewer note. Please retry.");
+      return;
+    }
+    setTransactions((current) => current.map((transaction) => transaction.databaseId === databaseId ? { ...transaction, reviewerNote: payload.reviewerNote ?? reviewerNote } : transaction));
   };
 
   return (
@@ -102,9 +163,15 @@ export function DashboardClient() {
               Upload transaction CSVs or explicitly load sample data, run MVP AML risk rules, review sanctions-placeholder hits, and download founder-demo compliance reports.
             </p>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-sm text-slate-200">
-            <div className="text-2xl font-bold text-white">{report.flaggedTransactions.length}</div>
-            flagged high-risk transactions
+          <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/10 p-4 text-sm text-slate-200">
+            <div>
+              <div className="text-2xl font-bold text-white">{report.flaggedTransactions.length}</div>
+              flagged high-risk transactions
+            </div>
+            <div className="text-xs text-slate-300">Signed in as {userEmail}</div>
+            <form action={logout}>
+              <button type="submit" className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-slate-100">Log out</button>
+            </form>
           </div>
         </header>
 
@@ -168,7 +235,7 @@ export function DashboardClient() {
             <div className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 className="text-xl font-semibold text-slate-950">Transaction screening</h2>
-                <p className="text-sm text-slate-500">Filter by risk level and inspect rules triggered for each payment.</p>
+                <p className="text-sm text-slate-500">Filter by risk level, review state, and inspect rules triggered for each payment.</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 {riskFilters.map((level) => (
@@ -184,6 +251,19 @@ export function DashboardClient() {
                     {level}
                   </button>
                 ))}
+                {reviewFilters.map((level) => (
+                  <button
+                    key={level}
+                    onClick={() => setReviewFilter(level)}
+                    className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+                      reviewFilter === level
+                        ? "bg-cyan-700 text-white"
+                        : "bg-cyan-50 text-cyan-800 hover:bg-cyan-100"
+                    }`}
+                  >
+                    {level}
+                  </button>
+                ))}
               </div>
             </div>
             {transactions.length === 0 ? (
@@ -192,7 +272,7 @@ export function DashboardClient() {
                 <p className="mt-2 text-sm text-slate-500">Upload CSV or use the Load Sample Data button to populate this founder-demo workspace.</p>
               </div>
             ) : null}
-            <TransactionTable transactions={filteredTransactions} />
+            <TransactionTable transactions={filteredTransactions} onReviewedChange={handleReviewedChange} onReviewerNoteSave={handleReviewerNoteSave} />
           </div>
 
           <aside className="space-y-5">
@@ -211,11 +291,12 @@ export function DashboardClient() {
                 </button>
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm text-slate-600 hover:border-cyan-400 hover:bg-cyan-50">
                   <span className="font-semibold text-slate-800">Choose CSV file</span>
-                  <span>Local browser-only parsing for Milestone 1</span>
+                  <span>Screens and appends to Supabase history</span>
                   <input
                     type="file"
                     accept=".csv,text/csv"
                     className="sr-only"
+                    disabled={isPending}
                     onChange={(event) => void handleUpload(event.target.files?.[0])}
                   />
                 </label>
@@ -276,7 +357,7 @@ export function DashboardClient() {
                 <li>Risk engine uses transparent progressive amount ranges and category-level score breakdowns.</li>
                 <li>Sanctions screening uses local sample data only.</li>
                 <li>Sanctions screening uses local sample placeholder data only; it is not connected to OFAC, UN, EU, UK, or any live sanctions/watchlist source.</li>
-                <li>Supabase schema is drafted for next milestone persistence and auth.</li>
+                <li>Authenticated workspaces persist transaction history in Supabase with RLS-scoped organization ownership.</li>
               </ul>
             </div>
           </aside>

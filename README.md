@@ -2,7 +2,7 @@
 
 ClearLedger AI is a B2B SaaS compliance-assistance MVP for small crypto exchanges and fintech startups in India and globally. It accepts transaction data, applies transparent AML-style mock risk rules, checks a local sample sanctions/watchlist placeholder, flags suspicious transactions, and exports compliance review reports.
 
-> **Important:** ClearLedger AI Milestone 1 is a compliance-assistance demo. It is not legal advice, does not replace licensed compliance counsel, and does not guarantee regulatory compliance or sanctions-screening completeness.
+> **Important:** ClearLedger AI Milestone 2 is a compliance-assistance demo. It is not legal advice, does not replace licensed compliance counsel, and does not guarantee regulatory compliance or sanctions-screening completeness.
 > **Important:** ClearLedger AI Milestone 1 is a compliance-assistance demo, not legal advice. It does not replace licensed compliance counsel, does not guarantee regulatory compliance, and does not perform live OFAC, UN, EU, UK, or other official sanctions screening. Sanctions/watchlist results come only from local sample placeholder data for demos and tests.
 
 ## Milestone 1 scope
@@ -25,7 +25,7 @@ ClearLedger AI is a B2B SaaS compliance-assistance MVP for small crypto exchange
 - Next.js App Router
 - TypeScript
 - Tailwind CSS
-- Supabase client placeholder and SQL schema draft
+- Supabase Auth, SSR cookie sessions, and organization-scoped persistence
 - Vitest for core logic tests
 - Vercel-ready configuration
 
@@ -43,7 +43,7 @@ Run the app locally:
 npm run dev
 ```
 
-Open `http://localhost:3000` and use `/dashboard` for the MVP workflow.
+Open `http://localhost:3000`, create an account at `/signup`, and use `/dashboard` for the authenticated MVP workflow.
 
 ## Environment variables
 
@@ -53,10 +53,10 @@ Copy `.env.example` to `.env.local` when enabling hosted services:
 cp .env.example .env.local
 ```
 
-| Variable | Required for Milestone 1 | Purpose |
+| Variable | Required for Milestone 2 | Purpose |
 | --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | No | Future Supabase project URL for auth/database |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | No | Future Supabase browser anon key |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL for Auth and database access |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anon key used by browser and server SSR clients; RLS controls data access |
 | `ANTHROPIC_API_KEY` | No | Future server-only Claude API support |
 
 Do not commit real secrets.
@@ -99,9 +99,25 @@ Every screened transaction includes an inline category breakdown for amount, jur
 
 This rules engine is intentionally simple and explainable for founder demos and early customer discovery.
 
-## Supabase schema
+## Supabase setup
 
-A draft schema is available in `supabase/schema.sql`. It includes organizations, profiles, transactions, compliance reports, enums, and starter row-level security policies.
+Run the complete SQL file in `supabase/schema.sql` from the Supabase SQL editor before testing authentication. It creates:
+
+- `organizations` with one owner per workspace.
+- `transactions` with `upload_batch_id`, raw CSV JSON, risk outputs, reviewed state, and reviewer notes.
+- RLS policies that allow authenticated users to read, insert, and update only rows belonging to their own organization via `auth.uid()` checks.
+- A secure `auth.users` trigger that creates the first organization automatically during email/password signup, so the app never needs a Supabase service-role key.
+
+Do not add `SUPABASE_SERVICE_ROLE_KEY` to the app environment. Milestone 2 uses only `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` with RLS.
+
+## Auth flow local testing
+
+1. Create a Supabase project and run `supabase/schema.sql` in the SQL editor.
+2. Copy `.env.example` to `.env.local` and fill `NEXT_PUBLIC_SUPABASE_URL` plus `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+3. In Supabase Auth settings, keep email/password signups enabled. For this MVP demo, disable mandatory email confirmation if you want immediate login after signup.
+4. Run `npm run dev`.
+5. Visit `/signup`, create an organization, confirm you land on `/dashboard`, refresh the page to verify session persistence, upload a CSV, mark transactions reviewed, and add reviewer notes.
+6. Click **Log out** and verify `/dashboard` redirects to `/login`.
 
 ## Quality checks
 
@@ -122,4 +138,4 @@ The project is Vercel-ready:
 
 ## Next recommended milestone
 
-Milestone 1.8 should add regression fixtures for larger real-world CSV samples, reviewer disposition notes, escalation workflow states, and improved sanctions-data abstraction while still avoiding live paid services until the product scope is validated.
+The next milestone should add password reset, optional email verification configuration, and team member invitations after the authenticated single-organization workflow is validated.
