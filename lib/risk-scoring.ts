@@ -14,6 +14,9 @@ const privacyAssets = new Set(["XMR", "ZEC", "DASH"]);
 const structuringWindowDays = 7;
 const structuringTransactionThresholdUsd = 10000;
 const structuringMinimumCount = 3;
+const structuringScoreFloor = 70;
+const structuringLargeWindowTotalUsd = 50_000;
+const structuringLargeWindowScoreFloor = 90;
 
 export const AMOUNT_SCORING_RANGES = [
   { minimumUsd: 1_000_000_000, points: 94, label: "At or above $1B: critical-scale transaction value." },
@@ -170,10 +173,49 @@ function baseRiskFactors(transaction: TransactionInput): RiskFactor[] {
   return factors;
 }
 
+function scoreFloorFromFactors(factors: RiskFactor[]): { floor: number; reasons: string[] } {
+  const reasons: string[] = [];
+  let floor = 0;
+
+  if (factors.some((factor) => factor.code === "STRUCTURING_PATTERN_7_DAY")) {
+    floor = Math.max(floor, structuringScoreFloor);
+    reasons.push(`structuring detected, so final score is floored at ${structuringScoreFloor}`);
+  }
+
+  if (factors.some((factor) => factor.code === "STRUCTURING_PATTERN_7_DAY_OVER_50K")) {
+    floor = Math.max(floor, structuringLargeWindowScoreFloor);
+    reasons.push(
+      `structuring window total exceeds $${structuringLargeWindowTotalUsd.toLocaleString()}, so final score is floored at ${structuringLargeWindowScoreFloor}`,
+    );
+  }
+
+  const hasPrivacyAsset = factors.some((factor) => factor.code === "PRIVACY_ASSET");
+  const hasHighRiskJurisdiction = factors.some((factor) =>
+    ["CUSTOMER_HIGH_RISK_COUNTRY", "COUNTERPARTY_HIGH_RISK_COUNTRY"].includes(factor.code),
+  );
+
+  if (hasPrivacyAsset && hasHighRiskJurisdiction) {
+    floor = Math.max(floor, 90);
+    reasons.push("privacy asset combined with a high-risk/sanctioned jurisdiction, so final score is floored at 90");
+  }
+
+  return { floor, reasons };
+}
+
 function finalizeScore(transaction: TransactionInput, factors: RiskFactor[]): ScoredTransaction {
   const sanctionsHits = screenSanctions(transaction);
-  const riskBreakdown = buildBreakdown(factors);
-  const riskScore = riskBreakdown.cappedTotal;
+  const baseRiskBreakdown = buildBreakdown(factors);
+  const scoreFloor = scoreFloorFromFactors(factors);
+  const riskScore = Math.max(baseRiskBreakdown.cappedTotal, scoreFloor.floor);
+  const floorExplanation =
+    scoreFloor.reasons.length > 0
+      ? `; score floor applied: ${scoreFloor.reasons.join("; ")}; final score ${riskScore}/100`
+      : "";
+  const riskBreakdown = {
+    ...baseRiskBreakdown,
+    cappedTotal: riskScore,
+    calculation: `${baseRiskBreakdown.calculation}${floorExplanation}`,
+  };
 
   return {
     ...transaction,
@@ -224,14 +266,21 @@ function detectStructuringIndexes(transactions: TransactionInput[]): Map<number,
       }
 
       if (windowRows.length >= structuringMinimumCount && total > structuringTransactionThresholdUsd) {
+        const exceedsLargeWindowTotal = total > structuringLargeWindowTotalUsd;
+        const scoreFloor = exceedsLargeWindowTotal ? structuringLargeWindowScoreFloor : structuringScoreFloor;
         const factor = buildFactor(
-          "STRUCTURING_PATTERN_7_DAY",
-          `${windowRows.length} transactions from the same wallet to the same counterparty within ${structuringWindowDays} days are each below $${structuringTransactionThresholdUsd.toLocaleString()} but total $${total.toLocaleString()}, indicating possible structuring/smurfing.`,
+          exceedsLargeWindowTotal ? "STRUCTURING_PATTERN_7_DAY_OVER_50K" : "STRUCTURING_PATTERN_7_DAY",
+          `${windowRows.length} transactions from the same wallet to the same counterparty within ${structuringWindowDays} days are each below $${structuringTransactionThresholdUsd.toLocaleString()} but total $${total.toLocaleString()}, indicating possible structuring/smurfing. This pattern applies a minimum final risk score of ${scoreFloor}.`,
           40,
           "High",
           "structuring",
         );
-        windowRows.forEach((row) => structuredIndexes.set(row.index, factor));
+        windowRows.forEach((row) => {
+          const existingFactor = structuredIndexes.get(row.index);
+          if (!existingFactor || factor.code === "STRUCTURING_PATTERN_7_DAY_OVER_50K") {
+            structuredIndexes.set(row.index, factor);
+          }
+        });
       }
     }
   });

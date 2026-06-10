@@ -108,10 +108,42 @@ describe("risk scoring", () => {
     ]);
 
     const structured = scored.filter((transaction) => transaction.id.startsWith("s"));
-    expect(structured.every((transaction) => transaction.riskLevel === "Medium")).toBe(true);
+    expect(structured.every((transaction) => transaction.riskLevel === "High")).toBe(true);
+    expect(structured.every((transaction) => transaction.riskScore >= 70)).toBe(true);
     expect(structured.every((transaction) => transaction.riskBreakdown.structuring === 40)).toBe(true);
     expect(structured[0].riskFactors[0].label).toContain("possible structuring/smurfing");
+    expect(structured[0].riskBreakdown.calculation).toContain("structuring detected");
     expect(scored.find((transaction) => transaction.id === "other")?.riskBreakdown.structuring).toBe(0);
+  });
+
+  it("floors large structuring windows above $50k at critical risk", () => {
+    const scored = scoreTransactions([
+      { ...baseTransaction, id: "s1", date: "2026-06-01", fiatValueUsd: 9_700, amount: 9_700 },
+      { ...baseTransaction, id: "s2", date: "2026-06-02", fiatValueUsd: 9_800, amount: 9_800 },
+      { ...baseTransaction, id: "s3", date: "2026-06-03", fiatValueUsd: 9_900, amount: 9_900 },
+      { ...baseTransaction, id: "s4", date: "2026-06-04", fiatValueUsd: 9_950, amount: 9_950 },
+      { ...baseTransaction, id: "s5", date: "2026-06-05", fiatValueUsd: 9_990, amount: 9_990 },
+      { ...baseTransaction, id: "s6", date: "2026-06-06", fiatValueUsd: 9_995, amount: 9_995 },
+    ]);
+
+    expect(scored.every((transaction) => transaction.riskLevel === "Critical")).toBe(true);
+    expect(scored.every((transaction) => transaction.riskScore >= 90)).toBe(true);
+    expect(scored[0].riskBreakdown.calculation).toContain("structuring window total exceeds $50,000");
+    expect(scored[0].riskFactors.map((factor) => factor.code)).toContain("STRUCTURING_PATTERN_7_DAY_OVER_50K");
+  });
+
+  it("floors high-risk jurisdiction plus privacy coin at critical risk even for low-value transfers", () => {
+    const scored = scoreTransaction({
+      ...baseTransaction,
+      customerCountry: "IR",
+      asset: "XMR",
+      fiatValueUsd: 100,
+      amount: 100,
+    });
+
+    expect(scored.riskLevel).toBe("Critical");
+    expect(scored.riskScore).toBeGreaterThanOrEqual(90);
+    expect(scored.riskBreakdown.calculation).toContain("privacy asset combined with a high-risk/sanctioned jurisdiction");
   });
 
   it("makes high-risk jurisdiction and large transfer combinations critical", () => {

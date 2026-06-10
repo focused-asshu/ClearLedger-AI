@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTransactionsCsv } from "@/lib/csv";
+import { parseTransactionsCsv, parseTransactionsCsvWithDiagnostics } from "@/lib/csv";
 
 const header = "id,date,customerName,customerCountry,walletAddress,counterpartyName,counterpartyCountry,asset,amount,fiatValueUsd,direction";
 const validRow = "txn1,2026-06-01,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,100,100,Outbound";
@@ -11,43 +11,94 @@ describe("CSV parsing validation", () => {
     expect(transaction.direction).toBe("outbound");
   });
 
-  it("rejects negative amounts", () => {
-    expect(() => parseTransactionsCsv(`${header}\ntxn1,2026-06-01,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,-1,100,inbound`)).toThrow(
-      "Negative amount values are not accepted",
+  it("collects invalid negative amount rows without rejecting valid rows", () => {
+    const result = parseTransactionsCsvWithDiagnostics(
+      `${header}\n${validRow}\ntxn2,2026-06-01,Asha Kapoor,IN,0xdef,Bluefin Capital,SG,USDT,-1,100,inbound`,
     );
+
+    expect(result.transactions).toHaveLength(1);
+    expect(result.rejectedRows).toEqual([
+      {
+        rowNumber: 3,
+        field: "amount",
+        reason: "Negative amount values are not accepted.",
+      },
+    ]);
   });
 
-  it("rejects zero-value transactions", () => {
-    expect(() => parseTransactionsCsv(`${header}\ntxn1,2026-06-01,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,0,100,inbound`)).toThrow(
-      "Zero amount values are not accepted",
+  it("collects invalid zero-value rows", () => {
+    const result = parseTransactionsCsvWithDiagnostics(
+      `${header}\ntxn1,2026-06-01,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,0,100,inbound`,
     );
+
+    expect(result.transactions).toHaveLength(0);
+    expect(result.rejectedRows[0]).toMatchObject({ field: "amount", reason: "Zero amount values are not accepted." });
   });
 
-  it("rejects missing identity fields", () => {
-    expect(() => parseTransactionsCsv(`${header}\ntxn1,2026-06-01,,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`)).toThrow(
-      "Missing required value",
+  it("collects rows with missing identity fields", () => {
+    const result = parseTransactionsCsvWithDiagnostics(
+      `${header}\ntxn1,2026-06-01,,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`,
     );
+
+    expect(result.transactions).toHaveLength(0);
+    expect(result.rejectedRows[0]).toMatchObject({ rowNumber: 2, field: "customerName", reason: "Missing required value." });
   });
 
-  it("rejects invalid dates", () => {
-    expect(() => parseTransactionsCsv(`${header}\ntxn1,not-a-date,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`)).toThrow(
-      "Invalid date",
+  it("collects invalid date rows", () => {
+    const malformedDate = parseTransactionsCsvWithDiagnostics(
+      `${header}\ntxn1,not-a-date,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`,
     );
-    expect(() => parseTransactionsCsv(`${header}\ntxn1,2026-02-31,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`)).toThrow(
-      "real calendar date",
+    const impossibleDate = parseTransactionsCsvWithDiagnostics(
+      `${header}\ntxn1,2026-02-31,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`,
     );
+
+    expect(malformedDate.rejectedRows[0].reason).toContain("Invalid date");
+    expect(impossibleDate.rejectedRows[0].reason).toContain("real calendar date");
   });
 
-  it("rejects CSV formula injection attempts at upload time", () => {
-    expect(() => parseTransactionsCsv(`${header}\ntxn1,2026-06-01,=cmd,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`)).toThrow(
-      "Unsafe value",
+  it("collects CSV formula injection attempts at upload time", () => {
+    const result = parseTransactionsCsvWithDiagnostics(
+      `${header}\ntxn1,2026-06-01,=cmd,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`,
     );
+
+    expect(result.transactions).toHaveLength(0);
+    expect(result.rejectedRows[0]).toMatchObject({ field: "customerName" });
+    expect(result.rejectedRows[0].reason).toContain("CSV formula prefixes");
   });
 
-  it("rejects script or HTML-like payloads at upload time", () => {
-    expect(() => parseTransactionsCsv(`${header}\ntxn1,2026-06-01,<script>alert(1)</script>,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`)).toThrow(
-      "script/HTML tags",
+  it("collects script or HTML-like payloads at upload time", () => {
+    const result = parseTransactionsCsvWithDiagnostics(
+      `${header}\ntxn1,2026-06-01,<script>alert(1)</script>,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`,
     );
+
+    expect(result.transactions).toHaveLength(0);
+    expect(result.rejectedRows[0].reason).toContain("script/HTML tags");
+  });
+
+  it("rejects javascript: payloads case-insensitively at upload time", () => {
+    const result = parseTransactionsCsvWithDiagnostics(
+      `${header}\ntxn1,2026-06-01, JaVaScRiPt:alert(1),IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`,
+    );
+
+    expect(result.transactions).toHaveLength(0);
+    expect(result.rejectedRows).toEqual([
+      {
+        rowNumber: 2,
+        field: "customerName",
+        reason: "Values beginning with javascript: are not accepted.",
+      },
+    ]);
+  });
+
+  it("parses valid rows while collecting invalid row errors", () => {
+    const result = parseTransactionsCsvWithDiagnostics(
+      `${header}\n${validRow}\ntxn2,2026-06-01,,IN,0xabc,Bluefin Capital,SG,USDT,100,100,inbound`,
+    );
+
+    expect(result.transactions).toHaveLength(1);
+    expect(result.transactions[0].id).toBe("txn1");
+    expect(result.rejectedRows).toHaveLength(1);
+    expect(result.rejectedRows[0]).toMatchObject({ rowNumber: 3, field: "customerName" });
   });
 
   it("enforces configurable row limits", () => {
