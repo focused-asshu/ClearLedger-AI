@@ -36,6 +36,27 @@ interface ParseTransactionsCsvOptions {
   maxBytes?: number;
 }
 
+export interface CsvRowError {
+  rowNumber: number;
+  field: string;
+  reason: string;
+}
+
+export interface ParseTransactionsCsvResult {
+  transactions: TransactionInput[];
+  rejectedRows: CsvRowError[];
+}
+
+class CsvRowValidationError extends Error {
+  constructor(
+    public readonly rowNumber: number,
+    public readonly field: string,
+    public readonly reason: string,
+  ) {
+    super(reason);
+  }
+}
+
 function parseLine(line: string): string[] {
   const values: string[] = [];
   let current = "";
@@ -62,14 +83,25 @@ function parseLine(line: string): string[] {
   return values;
 }
 
+function rejectRow(rowNumber: number, field: string, reason: string): never {
+  throw new CsvRowValidationError(rowNumber, field, reason);
+}
+
 function assertSafeCell(value: string, field: string, rowNumber: number) {
   const trimmed = value.trim();
   const startsWithFormulaPrefix = /^[=+\-@]/.test(trimmed);
   const containsMarkup = /<\s*\/?\s*[a-z][^>]*>/i.test(trimmed);
+  const startsWithJavascriptProtocol = /^javascript:/i.test(trimmed);
+
+  if (startsWithJavascriptProtocol) {
+    rejectRow(rowNumber, field, "Values beginning with javascript: are not accepted.");
+  }
 
   if (startsWithFormulaPrefix || containsMarkup) {
-    throw new Error(
-      `Unsafe value in row ${rowNumber}, field ${field}. CSV formula prefixes (=, +, -, @) and script/HTML tags are not accepted.`,
+    rejectRow(
+      rowNumber,
+      field,
+      "CSV formula prefixes (=, +, -, @) and script/HTML tags are not accepted.",
     );
   }
 }
@@ -78,15 +110,15 @@ function parsePositiveNumber(value: string, field: "amount" | "fiatValueUsd", ro
   const parsed = Number(value);
 
   if (!Number.isFinite(parsed)) {
-    throw new Error(`Invalid numeric value in row ${rowNumber}, field ${field}: ${value}`);
+    rejectRow(rowNumber, field, `Invalid numeric value: ${value}`);
   }
 
   if (parsed < 0) {
-    throw new Error(`Negative ${field} values are not accepted in row ${rowNumber}.`);
+    rejectRow(rowNumber, field, `Negative ${field} values are not accepted.`);
   }
 
   if (parsed === 0) {
-    throw new Error(`Zero ${field} values are not accepted in row ${rowNumber}.`);
+    rejectRow(rowNumber, field, `Zero ${field} values are not accepted.`);
   }
 
   return parsed;
@@ -96,7 +128,7 @@ function assertValidDate(value: string, rowNumber: number) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
 
   if (!match) {
-    throw new Error(`Invalid date in row ${rowNumber}: ${value}. Use YYYY-MM-DD.`);
+    rejectRow(rowNumber, "date", `Invalid date: ${value}. Use YYYY-MM-DD.`);
   }
 
   const [, year, month, day] = match;
@@ -107,7 +139,7 @@ function assertValidDate(value: string, rowNumber: number) {
     parsed.getUTCDate() === Number(day);
 
   if (!isRoundTripValid) {
-    throw new Error(`Invalid date in row ${rowNumber}: ${value}. Use a real calendar date.`);
+    rejectRow(rowNumber, "date", `Invalid date: ${value}. Use a real calendar date.`);
   }
 }
 
@@ -115,13 +147,54 @@ function normalizeDirection(value: string, rowNumber: number): TransactionInput[
   const direction = value.trim().toLowerCase();
 
   if (direction !== "inbound" && direction !== "outbound") {
-    throw new Error(`Invalid direction in row ${rowNumber}: ${value}`);
+    rejectRow(rowNumber, "direction", `Invalid direction: ${value}`);
   }
 
   return direction;
 }
 
-export function parseTransactionsCsv(csv: string, options: ParseTransactionsCsvOptions = {}): TransactionInput[] {
+function parseTransactionRow(headers: string[], line: string, rowNumber: number): TransactionInput {
+  const values = parseLine(line);
+  const row = Object.fromEntries(headers.map((header, headerIndex) => [header, values[headerIndex] ?? ""]));
+
+  for (const field of requiredTextFields) {
+    if (!row[field]?.trim()) {
+      rejectRow(rowNumber, field, "Missing required value.");
+    }
+  }
+
+  const amount = parsePositiveNumber(row.amount, "amount", rowNumber);
+  const fiatValueUsd = parsePositiveNumber(row.fiatValueUsd, "fiatValueUsd", rowNumber);
+
+  headers.forEach((header) => {
+    if (header !== "amount" && header !== "fiatValueUsd") {
+      assertSafeCell(row[header] ?? "", header, rowNumber);
+    }
+  });
+
+  assertValidDate(row.date, rowNumber);
+  const direction = normalizeDirection(row.direction, rowNumber);
+
+  return {
+    id: row.id,
+    date: row.date,
+    customerName: row.customerName,
+    customerCountry: row.customerCountry,
+    walletAddress: row.walletAddress,
+    counterpartyName: row.counterpartyName,
+    counterpartyCountry: row.counterpartyCountry,
+    asset: row.asset,
+    amount,
+    fiatValueUsd,
+    direction,
+    status: row.status as TransactionStatus | undefined,
+  };
+}
+
+export function parseTransactionsCsvWithDiagnostics(
+  csv: string,
+  options: ParseTransactionsCsvOptions = {},
+): ParseTransactionsCsvResult {
   const maxRows = options.maxRows ?? DEFAULT_CSV_UPLOAD_LIMITS.maxRows;
   const maxBytes = options.maxBytes ?? DEFAULT_CSV_UPLOAD_LIMITS.maxBytes;
   const csvBytes = new TextEncoder().encode(csv).byteLength;
@@ -135,7 +208,7 @@ export function parseTransactionsCsv(csv: string, options: ParseTransactionsCsvO
     .map((line) => line.trim())
     .filter(Boolean);
 
-  if (lines.length < 2) return [];
+  if (lines.length < 2) return { transactions: [], rejectedRows: [] };
 
   const dataRowCount = lines.length - 1;
   if (dataRowCount > maxRows) {
@@ -148,42 +221,27 @@ export function parseTransactionsCsv(csv: string, options: ParseTransactionsCsvO
     throw new Error(`Missing required CSV headers: ${missingHeaders.join(", ")}`);
   }
 
-  return lines.slice(1).map((line, index) => {
+  const transactions: TransactionInput[] = [];
+  const rejectedRows: CsvRowError[] = [];
+
+  lines.slice(1).forEach((line, index) => {
     const rowNumber = index + 2;
-    const values = parseLine(line);
-    const row = Object.fromEntries(headers.map((header, headerIndex) => [header, values[headerIndex] ?? ""]));
 
-    requiredTextFields.forEach((field) => {
-      if (!row[field]?.trim()) {
-        throw new Error(`Missing required value in row ${rowNumber}, field ${field}.`);
+    try {
+      transactions.push(parseTransactionRow(headers, line, rowNumber));
+    } catch (error) {
+      if (error instanceof CsvRowValidationError) {
+        rejectedRows.push({ rowNumber: error.rowNumber, field: error.field, reason: error.reason });
+        return;
       }
-    });
 
-    const amount = parsePositiveNumber(row.amount, "amount", rowNumber);
-    const fiatValueUsd = parsePositiveNumber(row.fiatValueUsd, "fiatValueUsd", rowNumber);
-
-    headers.forEach((header) => {
-      if (header !== "amount" && header !== "fiatValueUsd") {
-        assertSafeCell(row[header] ?? "", header, rowNumber);
-      }
-    });
-
-    assertValidDate(row.date, rowNumber);
-    const direction = normalizeDirection(row.direction, rowNumber);
-
-    return {
-      id: row.id,
-      date: row.date,
-      customerName: row.customerName,
-      customerCountry: row.customerCountry,
-      walletAddress: row.walletAddress,
-      counterpartyName: row.counterpartyName,
-      counterpartyCountry: row.counterpartyCountry,
-      asset: row.asset,
-      amount,
-      fiatValueUsd,
-      direction,
-      status: row.status as TransactionStatus | undefined,
-    };
+      throw error;
+    }
   });
+
+  return { transactions, rejectedRows };
+}
+
+export function parseTransactionsCsv(csv: string, options: ParseTransactionsCsvOptions = {}): TransactionInput[] {
+  return parseTransactionsCsvWithDiagnostics(csv, options).transactions;
 }

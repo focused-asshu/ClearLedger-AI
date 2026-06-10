@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { sampleTransactions } from "@/data/sample-transactions";
-import { DEFAULT_CSV_UPLOAD_LIMITS, parseTransactionsCsv } from "@/lib/csv";
+import { DEFAULT_CSV_UPLOAD_LIMITS, parseTransactionsCsvWithDiagnostics } from "@/lib/csv";
 import { generateComplianceReport, transactionsToCsv } from "@/lib/report";
 import { scoreTransactions } from "@/lib/risk-scoring";
 import type { RiskLevel, TransactionInput } from "@/lib/types";
@@ -28,6 +28,8 @@ export function DashboardClient() {
   const [transactions, setTransactions] = useState<TransactionInput[]>(sampleTransactions);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
   const [uploadMessage, setUploadMessage] = useState("Using included sample transaction data.");
+  const [uploadStatus, setUploadStatus] = useState<"info" | "success" | "error">("info");
+  const [uploadRowErrors, setUploadRowErrors] = useState<Array<{ rowNumber: number; field: string; reason: string }>>([]);
 
   const scoredTransactions = useMemo(() => scoreTransactions(transactions), [transactions]);
   const report = useMemo(() => generateComplianceReport(scoredTransactions), [scoredTransactions]);
@@ -67,10 +69,16 @@ export function DashboardClient() {
       }
 
       const csv = await file.text();
-      const parsedTransactions = parseTransactionsCsv(csv);
+      const { transactions: parsedTransactions, rejectedRows } = parseTransactionsCsvWithDiagnostics(csv);
       setTransactions(parsedTransactions);
-      setUploadMessage(`Loaded ${parsedTransactions.length} transactions from ${file.name}.`);
+      setUploadRowErrors(rejectedRows);
+      setUploadStatus(rejectedRows.length > 0 ? "error" : "success");
+      setUploadMessage(
+        `${parsedTransactions.length} rows imported, ${rejectedRows.length} rows rejected from ${file.name}.`,
+      );
     } catch (error) {
+      setUploadStatus("error");
+      setUploadRowErrors([]);
       setUploadMessage(error instanceof Error ? error.message : "Could not parse CSV file.");
     }
   };
@@ -189,7 +197,25 @@ export function DashboardClient() {
                   onChange={(event) => void handleUpload(event.target.files?.[0])}
                 />
               </label>
-              <p className="mt-3 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">{uploadMessage}</p>
+              <div
+                role={uploadStatus === "error" ? "alert" : "status"}
+                className={`mt-3 rounded-xl px-3 py-2 text-xs ${
+                  uploadStatus === "error"
+                    ? "border border-red-200 bg-red-50 text-red-700"
+                    : "bg-slate-100 text-slate-600"
+                }`}
+              >
+                <p>{uploadMessage}</p>
+                {uploadRowErrors.length > 0 ? (
+                  <ul className="mt-2 list-disc space-y-1 pl-4">
+                    {uploadRowErrors.map((rowError) => (
+                      <li key={`${rowError.rowNumber}-${rowError.field}`}>
+                        Row {rowError.rowNumber}, {rowError.field}: {rowError.reason}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
             </div>
 
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
