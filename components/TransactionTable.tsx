@@ -1,6 +1,14 @@
 import { RiskBadge } from "./RiskBadge";
 import type { ScoredTransaction } from "@/lib/types";
 
+function formatUsd(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
 export function TransactionTable({ transactions }: { transactions: ScoredTransaction[] }) {
   return (
     <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -50,15 +58,29 @@ export function TransactionTable({ transactions }: { transactions: ScoredTransac
                     <span>Direction: +{transaction.riskBreakdown.direction}</span>
                     <span>Watchlist: +{transaction.riskBreakdown.watchlist}</span>
                     <span>Other: +{transaction.riskBreakdown.other}</span>
+                    {transaction.structuringAlert ? (
+                      <>
+                        <span className="col-span-2 font-semibold text-amber-800">Combined structured value: {formatUsd(transaction.structuringAlert.combinedValueUsd)}</span>
+                        <span className="col-span-2 font-semibold text-amber-800">Structured transaction count: {transaction.structuringAlert.linkedTransactionCount}</span>
+                      </>
+                    ) : null}
                     <span className="col-span-2 font-medium text-slate-700">{transaction.riskBreakdown.calculation}</span>
                   </div>
                 </td>
                 <td className="px-5 py-4 text-xs text-slate-600">
+                  {transaction.structuringAlert ? (
+                    <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                      <div className="font-bold">Structuring Alert</div>
+                      <div>{transaction.structuringAlert.linkedTransactionCount} linked transactions</div>
+                      <div>Combined value: {formatUsd(transaction.structuringAlert.combinedValueUsd)}</div>
+                      <div>Time window: {transaction.structuringAlert.timeWindow} ({transaction.structuringAlert.windowStart} to {transaction.structuringAlert.windowEnd})</div>
+                    </div>
+                  ) : null}
                   {transaction.riskFactors.length === 0 ? (
                     <span>No rules triggered</span>
                   ) : (
                     <ul className="max-w-xs list-disc space-y-1 pl-4">
-                      {transaction.riskFactors.slice(0, 5).map((factor) => (
+                      {transaction.riskFactors.slice(0, 6).map((factor) => (
                         <li key={`${factor.category}-${factor.code}`}>{factor.label} (+{factor.points})</li>
                       ))}
                     </ul>

@@ -25,9 +25,9 @@ function downloadFile(filename: string, content: string, mimeType: string) {
 }
 
 export function DashboardClient() {
-  const [transactions, setTransactions] = useState<TransactionInput[]>(sampleTransactions);
+  const [transactions, setTransactions] = useState<TransactionInput[]>([]);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
-  const [uploadMessage, setUploadMessage] = useState("Using included sample transaction data.");
+  const [uploadMessage, setUploadMessage] = useState("No transactions loaded. Upload a CSV or load sample data to begin.");
   const [uploadStatus, setUploadStatus] = useState<"info" | "success" | "error">("info");
   const [uploadRowErrors, setUploadRowErrors] = useState<Array<{ rowNumber: number; field: string; reason: string }>>([]);
 
@@ -57,6 +57,14 @@ export function DashboardClient() {
       }).format(report.totalValueUsd),
     [report.totalValueUsd],
   );
+
+  const handleLoadSampleData = () => {
+    setTransactions(sampleTransactions);
+    setRiskFilter("All");
+    setUploadRowErrors([]);
+    setUploadStatus("success");
+    setUploadMessage(`${sampleTransactions.length} sample transactions loaded for demo review.`);
+  };
 
   const handleUpload = async (file: File | undefined) => {
     if (!file) return;
@@ -91,7 +99,7 @@ export function DashboardClient() {
             <p className="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300">ClearLedger AI</p>
             <h1 className="mt-3 text-3xl font-bold tracking-tight md:text-4xl">Compliance operations dashboard</h1>
             <p className="mt-3 max-w-2xl text-slate-300">
-              Upload transaction CSVs, run MVP AML risk rules, review sanctions-placeholder hits, and download founder-demo compliance reports.
+              Upload transaction CSVs or explicitly load sample data, run MVP AML risk rules, review sanctions-placeholder hits, and download founder-demo compliance reports.
             </p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-sm text-slate-200">
@@ -178,6 +186,12 @@ export function DashboardClient() {
                 ))}
               </div>
             </div>
+            {transactions.length === 0 ? (
+              <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+                <h3 className="text-lg font-semibold text-slate-950">No transactions loaded.</h3>
+                <p className="mt-2 text-sm text-slate-500">Upload CSV or use the Load Sample Data button to populate this founder-demo workspace.</p>
+              </div>
+            ) : null}
             <TransactionTable transactions={filteredTransactions} />
           </div>
 
@@ -187,16 +201,25 @@ export function DashboardClient() {
               <p className="mt-2 text-sm text-slate-500">
                 Required headers: id, date, customerName, customerCountry, walletAddress, counterpartyName, counterpartyCountry, asset, amount, fiatValueUsd, direction. Upload limit: {DEFAULT_CSV_UPLOAD_LIMITS.maxRows.toLocaleString()} rows / {DEFAULT_CSV_UPLOAD_LIMITS.maxBytes.toLocaleString()} bytes.
               </p>
-              <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600 hover:border-cyan-400 hover:bg-cyan-50">
-                <span className="font-semibold text-slate-800">Choose CSV file</span>
-                <span>Local browser-only parsing for Milestone 1</span>
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  className="sr-only"
-                  onChange={(event) => void handleUpload(event.target.files?.[0])}
-                />
-              </label>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={handleLoadSampleData}
+                  className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+                >
+                  Load Sample Data
+                </button>
+                <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm text-slate-600 hover:border-cyan-400 hover:bg-cyan-50">
+                  <span className="font-semibold text-slate-800">Choose CSV file</span>
+                  <span>Local browser-only parsing for Milestone 1</span>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="sr-only"
+                    onChange={(event) => void handleUpload(event.target.files?.[0])}
+                  />
+                </label>
+              </div>
               <div
                 role={uploadStatus === "error" ? "alert" : "status"}
                 className={`mt-3 rounded-xl px-3 py-2 text-xs ${
