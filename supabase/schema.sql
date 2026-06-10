@@ -1,78 +1,113 @@
--- ClearLedger AI Milestone 1 schema draft
--- Run in Supabase SQL editor after enabling authentication for your project.
+-- ClearLedger AI Milestone 2 schema
+-- Run this complete file in the Supabase SQL editor for the project that backs the app.
+-- It uses only the anon key from the app; ownership isolation is enforced by RLS and auth.uid().
 
-create type risk_level as enum ('Low', 'Medium', 'High', 'Critical');
-create type transaction_direction as enum ('inbound', 'outbound');
-create type transaction_status as enum ('pending', 'cleared', 'flagged', 'reported');
+create extension if not exists pgcrypto;
 
 create table if not exists organizations (
   id uuid primary key default gen_random_uuid(),
   name text not null,
-  created_at timestamptz not null default now()
-);
-
-create table if not exists profiles (
-  id uuid primary key references auth.users(id) on delete cascade,
-  organization_id uuid references organizations(id) on delete set null,
-  full_name text,
-  role text not null default 'analyst',
-  created_at timestamptz not null default now()
+  owner_user_id uuid references auth.users not null,
+  created_at timestamptz default now()
 );
 
 create table if not exists transactions (
-  id text primary key,
-  organization_id uuid references organizations(id) on delete cascade,
-  transaction_date date not null,
-  customer_name text not null,
-  customer_country text not null,
-  wallet_address text not null,
-  counterparty_name text not null,
-  counterparty_country text not null,
-  asset text not null,
-  amount numeric not null,
-  fiat_value_usd numeric not null,
-  direction transaction_direction not null,
-  status transaction_status not null default 'pending',
-  risk_score integer not null default 0,
-  risk_level risk_level not null default 'Low',
-  risk_factors jsonb not null default '[]'::jsonb,
-  sanctions_hits jsonb not null default '[]'::jsonb,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid references organizations not null,
+  upload_batch_id uuid not null,
+  created_at timestamptz default now(),
+  raw_csv_row jsonb not null,
+  risk_score int not null,
+  risk_level text not null,
+  flags text[],
+  score_breakdown jsonb,
+  reviewed boolean not null default false,
+  reviewer_note text
 );
 
-create table if not exists compliance_reports (
-  id uuid primary key default gen_random_uuid(),
-  organization_id uuid references organizations(id) on delete cascade,
-  generated_by uuid references profiles(id) on delete set null,
-  generated_at timestamptz not null default now(),
-  total_transactions integer not null,
-  total_value_usd numeric not null,
-  risk_summary jsonb not null,
-  flagged_transaction_ids text[] not null default '{}',
-  disclaimer text not null,
-  created_at timestamptz not null default now()
-);
+create index if not exists organizations_owner_user_id_idx on organizations(owner_user_id);
+create index if not exists transactions_org_created_at_idx on transactions(org_id, created_at desc);
+create index if not exists transactions_upload_batch_id_idx on transactions(upload_batch_id);
 
 alter table organizations enable row level security;
-alter table profiles enable row level security;
 alter table transactions enable row level security;
-alter table compliance_reports enable row level security;
 
-create policy "Users can view own profile" on profiles
-  for select using (auth.uid() = id);
+create policy "Users can read their own organization" on organizations
+  for select
+  using (owner_user_id = auth.uid());
 
-create policy "Users can view organization transactions" on transactions
-  for select using (
-    organization_id in (select organization_id from profiles where id = auth.uid())
+create policy "Users can create their own organization" on organizations
+  for insert
+  with check (owner_user_id = auth.uid());
+
+create policy "Users can update their own organization" on organizations
+  for update
+  using (owner_user_id = auth.uid())
+  with check (owner_user_id = auth.uid());
+
+create policy "Users can read organization transactions" on transactions
+  for select
+  using (
+    exists (
+      select 1
+      from organizations
+      where organizations.id = transactions.org_id
+        and organizations.owner_user_id = auth.uid()
+    )
   );
 
-create policy "Users can manage organization transactions" on transactions
-  for all using (
-    organization_id in (select organization_id from profiles where id = auth.uid())
+create policy "Users can insert organization transactions" on transactions
+  for insert
+  with check (
+    exists (
+      select 1
+      from organizations
+      where organizations.id = transactions.org_id
+        and organizations.owner_user_id = auth.uid()
+    )
   );
 
-create policy "Users can view organization reports" on compliance_reports
-  for select using (
-    organization_id in (select organization_id from profiles where id = auth.uid())
+create policy "Users can update organization transactions" on transactions
+  for update
+  using (
+    exists (
+      select 1
+      from organizations
+      where organizations.id = transactions.org_id
+        and organizations.owner_user_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from organizations
+      where organizations.id = transactions.org_id
+        and organizations.owner_user_id = auth.uid()
+    )
   );
+
+create or replace function public.create_organization_for_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  requested_org_name text;
+begin
+  requested_org_name := nullif(trim(new.raw_user_meta_data ->> 'organization_name'), '');
+
+  insert into public.organizations (name, owner_user_id)
+  values (
+    coalesce(requested_org_name, split_part(new.email, '@', 1) || ' Workspace'),
+    new.id
+  );
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created_create_organization on auth.users;
+create trigger on_auth_user_created_create_organization
+  after insert on auth.users
+  for each row execute function public.create_organization_for_new_user();

@@ -79,3 +79,11 @@ export interface ComplianceReport {
   flaggedTransactions: ScoredTransaction[];
   disclaimer: string;
 }
+
+export interface PersistentTransaction extends ScoredTransaction {
+  databaseId: string;
+  uploadBatchId: string;
+  uploadedAt: string;
+  reviewed: boolean;
+  reviewerNote: string;
+}
