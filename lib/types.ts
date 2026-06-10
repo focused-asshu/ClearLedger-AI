@@ -53,12 +53,22 @@ export interface RiskBreakdown {
   calculation: string;
 }
 
+export interface StructuringAlert {
+  label: "Structuring Alert";
+  linkedTransactionCount: number;
+  combinedValueUsd: number;
+  windowStart: string;
+  windowEnd: string;
+  timeWindow: string;
+}
+
 export interface ScoredTransaction extends TransactionInput {
   riskScore: number;
   riskLevel: RiskLevel;
   riskFactors: RiskFactor[];
   riskBreakdown: RiskBreakdown;
   sanctionsHits: SanctionsHit[];
+  structuringAlert?: StructuringAlert;
 }
 
 export interface ComplianceReport {

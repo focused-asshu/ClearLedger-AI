@@ -10,6 +10,17 @@ const validRow = "txn1,2026-06-01,Asha Kapoor,IN,0xabc,Bluefin Capital,SG,USDT,1
 afterEach(() => cleanup());
 
 describe("dashboard CSV upload feedback", () => {
+  it("starts empty and only loads sample data when requested", async () => {
+    render(<DashboardClient />);
+
+    expect(screen.getByText("No transactions loaded.")).toBeInTheDocument();
+    expect(screen.queryByText("txn_1001")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /load sample data/i }));
+
+    await waitFor(() => expect(screen.getByText("txn_1001")).toBeInTheDocument());
+  });
+
   it("shows a visible red error when CSV parsing fails", async () => {
     render(<DashboardClient />);
 

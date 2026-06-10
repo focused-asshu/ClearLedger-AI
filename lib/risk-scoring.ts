@@ -5,6 +5,7 @@ import type {
   RiskFactor,
   RiskLevel,
   ScoredTransaction,
+  StructuringAlert,
   TransactionInput,
 } from "./types";
 
@@ -173,19 +174,33 @@ function baseRiskFactors(transaction: TransactionInput): RiskFactor[] {
   return factors;
 }
 
+function hasStructuringFactor(factors: RiskFactor[]): boolean {
+  return factors.some((factor) => factor.code.startsWith("STRUCTURING_"));
+}
+
+function hasCriticalStructuringFactor(factors: RiskFactor[]): boolean {
+  return factors.some((factor) =>
+    [
+      "STRUCTURING_PATTERN_7_DAY_OVER_50K",
+      "STRUCTURING_PATTERN_10_PLUS_TRANSACTIONS",
+      "STRUCTURING_HIGH_RISK_JURISDICTION",
+    ].includes(factor.code),
+  );
+}
+
 function scoreFloorFromFactors(factors: RiskFactor[]): { floor: number; reasons: string[] } {
   const reasons: string[] = [];
   let floor = 0;
 
-  if (factors.some((factor) => factor.code === "STRUCTURING_PATTERN_7_DAY")) {
+  if (hasStructuringFactor(factors)) {
     floor = Math.max(floor, structuringScoreFloor);
     reasons.push(`structuring detected, so final score is floored at ${structuringScoreFloor}`);
   }
 
-  if (factors.some((factor) => factor.code === "STRUCTURING_PATTERN_7_DAY_OVER_50K")) {
+  if (hasCriticalStructuringFactor(factors)) {
     floor = Math.max(floor, structuringLargeWindowScoreFloor);
     reasons.push(
-      `structuring window total exceeds $${structuringLargeWindowTotalUsd.toLocaleString()}, so final score is floored at ${structuringLargeWindowScoreFloor}`,
+      `critical structuring trigger met (combined value above $${structuringLargeWindowTotalUsd.toLocaleString()}, 10+ linked transactions, or high-risk jurisdiction), so final score is floored at ${structuringLargeWindowScoreFloor}`,
     );
   }
 
@@ -202,7 +217,7 @@ function scoreFloorFromFactors(factors: RiskFactor[]): { floor: number; reasons:
   return { floor, reasons };
 }
 
-function finalizeScore(transaction: TransactionInput, factors: RiskFactor[]): ScoredTransaction {
+function finalizeScore(transaction: TransactionInput, factors: RiskFactor[], structuringAlert?: StructuringAlert): ScoredTransaction {
   const sanctionsHits = screenSanctions(transaction);
   const baseRiskBreakdown = buildBreakdown(factors);
   const scoreFloor = scoreFloorFromFactors(factors);
@@ -225,6 +240,7 @@ function finalizeScore(transaction: TransactionInput, factors: RiskFactor[]): Sc
     riskFactors: factors,
     riskBreakdown,
     sanctionsHits,
+    structuringAlert,
   };
 }
 
@@ -237,9 +253,149 @@ function parseValidDate(date: string): number | undefined {
   return Number.isNaN(timestamp) ? undefined : timestamp;
 }
 
-function detectStructuringIndexes(transactions: TransactionInput[]): Map<number, RiskFactor> {
-  const structuredIndexes = new Map<number, RiskFactor>();
-  const groups = new Map<string, Array<{ index: number; transaction: TransactionInput; timestamp: number }>>();
+type StructuringWindowRow = { index: number; transaction: TransactionInput; timestamp: number };
+type StructuringDetection = { factors: RiskFactor[]; alert: StructuringAlert };
+
+const rapidBurstWindowMs = 24 * 60 * 60 * 1000;
+const nearThresholdMinimumUsd = 9_700;
+
+function formatUsd(value: number): string {
+  return `$${value.toLocaleString()}`;
+}
+
+function buildTimeWindow(startTimestamp: number, endTimestamp: number): string {
+  const durationHours = Math.max(0, Math.round((endTimestamp - startTimestamp) / (60 * 60 * 1000)));
+
+  if (durationHours < 24) return `${durationHours} hours`;
+  const durationDays = Math.round(durationHours / 24);
+  return `${durationDays} days`;
+}
+
+function isEscalatingPattern(windowRows: StructuringWindowRow[]): boolean {
+  if (windowRows.length < 4) return false;
+
+  const values = windowRows.map((row) => row.transaction.fiatValueUsd);
+  const hasMeaningfulIncrease = values.at(-1)! >= nearThresholdMinimumUsd && values[0] <= values.at(-1)! * 0.6;
+  return hasMeaningfulIncrease && values.every((value, index) => index === 0 || value > values[index - 1]);
+}
+
+function buildStructuringFactors(windowRows: StructuringWindowRow[], total: number): RiskFactor[] {
+  const factors: RiskFactor[] = [];
+  const linkedCount = windowRows.length;
+  const hasHighRiskJurisdiction = windowRows.some(
+    ({ transaction }) =>
+      highRiskJurisdictions.has(transaction.customerCountry.toUpperCase()) ||
+      highRiskJurisdictions.has(transaction.counterpartyCountry.toUpperCase()),
+  );
+  const nearThresholdCount = windowRows.filter(
+    ({ transaction }) => transaction.fiatValueUsd >= nearThresholdMinimumUsd,
+  ).length;
+  const hasRapidBurst = windowRows.some((row, index) => {
+    let burstCount = 0;
+    for (let cursor = index; cursor < windowRows.length; cursor += 1) {
+      if (windowRows[cursor].timestamp - row.timestamp <= rapidBurstWindowMs) burstCount += 1;
+    }
+    return burstCount >= 5;
+  });
+  const hasEscalatingPattern = isEscalatingPattern(windowRows);
+  const criticalCodes: string[] = [];
+
+  if (total > structuringLargeWindowTotalUsd) criticalCodes.push("STRUCTURING_PATTERN_7_DAY_OVER_50K");
+  if (linkedCount >= 10) criticalCodes.push("STRUCTURING_PATTERN_10_PLUS_TRANSACTIONS");
+  if (hasHighRiskJurisdiction) criticalCodes.push("STRUCTURING_HIGH_RISK_JURISDICTION");
+
+  factors.push(
+    buildFactor(
+      criticalCodes[0] ?? "STRUCTURING_PATTERN_7_DAY",
+      `Structuring detected: +40. ${linkedCount} linked sub-$${structuringTransactionThresholdUsd.toLocaleString()} transfers from the same wallet to the same counterparty total ${formatUsd(total)} within ${structuringWindowDays} days.`,
+      40,
+      criticalCodes.length > 0 ? "Critical" : "High",
+      "structuring",
+    ),
+  );
+
+  criticalCodes.slice(1).forEach((code) => {
+    factors.push(
+      buildFactor(
+        code,
+        code === "STRUCTURING_PATTERN_10_PLUS_TRANSACTIONS"
+          ? `Structured transaction count: ${linkedCount}. 10+ linked transactions trigger the critical structuring score floor.`
+          : "High-risk jurisdiction involved in a structured transaction window triggers the critical structuring score floor.",
+        0,
+        "Critical",
+        "structuring",
+      ),
+    );
+  });
+
+  if (nearThresholdCount >= structuringMinimumCount) {
+    factors.push(
+      buildFactor(
+        "STRUCTURING_NEAR_THRESHOLD_PATTERN",
+        `Near-threshold pattern: +15. ${nearThresholdCount} linked transfers are at or above ${formatUsd(nearThresholdMinimumUsd)} but below ${formatUsd(structuringTransactionThresholdUsd)}.`,
+        15,
+        "High",
+        "structuring",
+      ),
+    );
+  }
+
+  if (hasRapidBurst) {
+    factors.push(
+      buildFactor(
+        "STRUCTURING_RAPID_BURST_24H",
+        "Rapid burst: +10. 5+ linked transfers occurred within 24 hours.",
+        10,
+        "High",
+        "structuring",
+      ),
+    );
+  }
+
+  if (hasEscalatingPattern) {
+    factors.push(
+      buildFactor(
+        "STRUCTURING_ESCALATING_PATTERN",
+        "Escalating structuring pattern: +15. Linked transfer values increase toward the reporting threshold over the window.",
+        15,
+        "High",
+        "structuring",
+      ),
+    );
+  }
+
+  if (total > structuringLargeWindowTotalUsd && !factors.some((factor) => factor.code === "STRUCTURING_PATTERN_7_DAY_OVER_50K")) {
+    factors.push(
+      buildFactor(
+        "STRUCTURING_PATTERN_7_DAY_OVER_50K",
+        `Combined structured value: ${formatUsd(total)}. Values above ${formatUsd(structuringLargeWindowTotalUsd)} trigger the critical structuring score floor.`,
+        0,
+        "Critical",
+        "structuring",
+      ),
+    );
+  }
+
+  return factors;
+}
+
+function shouldReplaceStructuringDetection(
+  existing: StructuringDetection | undefined,
+  candidate: StructuringDetection,
+): boolean {
+  if (!existing) return true;
+  if (candidate.alert.linkedTransactionCount !== existing.alert.linkedTransactionCount) {
+    return candidate.alert.linkedTransactionCount > existing.alert.linkedTransactionCount;
+  }
+  if (candidate.alert.combinedValueUsd !== existing.alert.combinedValueUsd) {
+    return candidate.alert.combinedValueUsd > existing.alert.combinedValueUsd;
+  }
+  return candidate.factors.reduce((total, factor) => total + factor.points, 0) > existing.factors.reduce((total, factor) => total + factor.points, 0);
+}
+
+function detectStructuringIndexes(transactions: TransactionInput[]): Map<number, StructuringDetection> {
+  const structuredIndexes = new Map<number, StructuringDetection>();
+  const groups = new Map<string, StructuringWindowRow[]>();
   const windowMs = structuringWindowDays * 24 * 60 * 60 * 1000;
 
   transactions.forEach((transaction, index) => {
@@ -256,7 +412,7 @@ function detectStructuringIndexes(transactions: TransactionInput[]): Map<number,
     const sorted = [...group].sort((left, right) => left.timestamp - right.timestamp);
 
     for (let start = 0; start < sorted.length; start += 1) {
-      const windowRows = [];
+      const windowRows: StructuringWindowRow[] = [];
       let total = 0;
 
       for (let end = start; end < sorted.length; end += 1) {
@@ -266,19 +422,24 @@ function detectStructuringIndexes(transactions: TransactionInput[]): Map<number,
       }
 
       if (windowRows.length >= structuringMinimumCount && total > structuringTransactionThresholdUsd) {
-        const exceedsLargeWindowTotal = total > structuringLargeWindowTotalUsd;
-        const scoreFloor = exceedsLargeWindowTotal ? structuringLargeWindowScoreFloor : structuringScoreFloor;
-        const factor = buildFactor(
-          exceedsLargeWindowTotal ? "STRUCTURING_PATTERN_7_DAY_OVER_50K" : "STRUCTURING_PATTERN_7_DAY",
-          `${windowRows.length} transactions from the same wallet to the same counterparty within ${structuringWindowDays} days are each below $${structuringTransactionThresholdUsd.toLocaleString()} but total $${total.toLocaleString()}, indicating possible structuring/smurfing. This pattern applies a minimum final risk score of ${scoreFloor}.`,
-          40,
-          "High",
-          "structuring",
-        );
+        const startDate = new Date(windowRows[0].timestamp).toISOString().slice(0, 10);
+        const endDate = new Date(windowRows.at(-1)!.timestamp).toISOString().slice(0, 10);
+        const factors = buildStructuringFactors(windowRows, total);
+        const detection: StructuringDetection = {
+          factors,
+          alert: {
+            label: "Structuring Alert",
+            linkedTransactionCount: windowRows.length,
+            combinedValueUsd: total,
+            windowStart: startDate,
+            windowEnd: endDate,
+            timeWindow: buildTimeWindow(windowRows[0].timestamp, windowRows.at(-1)!.timestamp),
+          },
+        };
+
         windowRows.forEach((row) => {
-          const existingFactor = structuredIndexes.get(row.index);
-          if (!existingFactor || factor.code === "STRUCTURING_PATTERN_7_DAY_OVER_50K") {
-            structuredIndexes.set(row.index, factor);
+          if (shouldReplaceStructuringDetection(structuredIndexes.get(row.index), detection)) {
+            structuredIndexes.set(row.index, detection);
           }
         });
       }
@@ -293,8 +454,8 @@ export function scoreTransactions(transactions: TransactionInput[]): ScoredTrans
 
   return transactions.map((transaction, index) => {
     const factors = baseRiskFactors(transaction);
-    const structuringFactor = structuringByIndex.get(index);
-    if (structuringFactor) factors.push(structuringFactor);
-    return finalizeScore(transaction, factors);
+    const structuringDetection = structuringByIndex.get(index);
+    if (structuringDetection) factors.push(...structuringDetection.factors);
+    return finalizeScore(transaction, factors, structuringDetection?.alert);
   });
 }
