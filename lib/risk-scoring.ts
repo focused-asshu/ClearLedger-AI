@@ -9,8 +9,8 @@ import type {
   TransactionInput,
 } from "./types";
 
-const highRiskJurisdictions = new Set(["IR", "KP", "MM", "SY", "CU"]);
-const elevatedRiskJurisdictions = new Set(["VG", "KY", "PA", "RU", "AE", "AF", "BY", "VE", "ZW"]);
+const highRiskJurisdictions = new Set(["IR", "KP", "MM", "SY", "CU", "RU"]);
+const elevatedRiskJurisdictions = new Set(["VG", "KY", "PA", "AE", "AF", "BY", "VE", "ZW"]);
 const privacyAssets = new Set(["XMR", "ZEC", "DASH"]);
 const structuringWindowDays = 7;
 const structuringTransactionThresholdUsd = 10000;
@@ -18,6 +18,11 @@ const structuringMinimumCount = 3;
 const structuringScoreFloor = 70;
 const structuringLargeWindowTotalUsd = 50_000;
 const structuringLargeWindowScoreFloor = 90;
+const criticalScoreFloor = 90;
+const highScoreFloor = 65;
+const highRiskOutboundCriticalAmountUsd = 25_000;
+const highRiskCriticalAmountUsd = 100_000;
+const largeTransferHighRiskFloorUsd = 500_000;
 
 export const AMOUNT_SCORING_RANGES = [
   { minimumUsd: 1_000_000_000, points: 94, label: "At or above $1B: critical-scale transaction value." },
@@ -188,18 +193,25 @@ function hasCriticalStructuringFactor(factors: RiskFactor[]): boolean {
   );
 }
 
-function scoreFloorFromFactors(factors: RiskFactor[]): { floor: number; reasons: string[] } {
+function scoreFloorFromFactors(
+  transaction: TransactionInput,
+  factors: RiskFactor[],
+): { floor: number; reasons: string[] } {
   const reasons: string[] = [];
   let floor = 0;
 
+  const applyFloor = (minimumScore: number, reason: string) => {
+    floor = Math.max(floor, minimumScore);
+    reasons.push(reason);
+  };
+
   if (hasStructuringFactor(factors)) {
-    floor = Math.max(floor, structuringScoreFloor);
-    reasons.push(`structuring detected, so final score is floored at ${structuringScoreFloor}`);
+    applyFloor(structuringScoreFloor, `structuring detected, so final score is floored at ${structuringScoreFloor}`);
   }
 
   if (hasCriticalStructuringFactor(factors)) {
-    floor = Math.max(floor, structuringLargeWindowScoreFloor);
-    reasons.push(
+    applyFloor(
+      structuringLargeWindowScoreFloor,
       `critical structuring trigger met (combined value above $${structuringLargeWindowTotalUsd.toLocaleString()}, 10+ linked transactions, or high-risk jurisdiction), so final score is floored at ${structuringLargeWindowScoreFloor}`,
     );
   }
@@ -208,10 +220,53 @@ function scoreFloorFromFactors(factors: RiskFactor[]): { floor: number; reasons:
   const hasHighRiskJurisdiction = factors.some((factor) =>
     ["CUSTOMER_HIGH_RISK_COUNTRY", "COUNTERPARTY_HIGH_RISK_COUNTRY"].includes(factor.code),
   );
+  const hasEddJurisdiction = factors.some((factor) =>
+    ["CUSTOMER_EDD_COUNTRY", "COUNTERPARTY_EDD_COUNTRY"].includes(factor.code),
+  );
+  const hasLargeOutboundTransfer = factors.some((factor) => factor.code === "LARGE_OUTBOUND_TRANSFER");
+  const hasSuspiciousEddCombination =
+    hasPrivacyAsset ||
+    hasStructuringFactor(factors) ||
+    hasLargeOutboundTransfer ||
+    (transaction.direction === "outbound" && transaction.fiatValueUsd >= highRiskOutboundCriticalAmountUsd) ||
+    transaction.fiatValueUsd >= highRiskCriticalAmountUsd;
 
+  // Calibration floors keep obvious High/Critical combinations from being diluted into Medium while
+  // preserving the transparent point-by-point category breakdown above. Floors are stated in the
+  // final calculation rather than hidden inside an opaque score adjustment.
   if (hasPrivacyAsset && hasHighRiskJurisdiction) {
-    floor = Math.max(floor, 90);
-    reasons.push("privacy asset combined with a high-risk/sanctioned jurisdiction, so final score is floored at 90");
+    applyFloor(
+      criticalScoreFloor,
+      `privacy asset combined with a high-risk/sanctioned jurisdiction, so final score is floored at ${criticalScoreFloor}`,
+    );
+  }
+
+  if (hasHighRiskJurisdiction && transaction.direction === "outbound" && transaction.fiatValueUsd >= highRiskOutboundCriticalAmountUsd) {
+    applyFloor(
+      criticalScoreFloor,
+      `high-risk jurisdiction outbound transfer at or above $${highRiskOutboundCriticalAmountUsd.toLocaleString()}, so final score is floored at ${criticalScoreFloor}`,
+    );
+  }
+
+  if (hasHighRiskJurisdiction && transaction.fiatValueUsd >= highRiskCriticalAmountUsd) {
+    applyFloor(
+      criticalScoreFloor,
+      `high-risk jurisdiction transfer at or above $${highRiskCriticalAmountUsd.toLocaleString()}, so final score is floored at ${criticalScoreFloor}`,
+    );
+  }
+
+  if (transaction.fiatValueUsd >= largeTransferHighRiskFloorUsd) {
+    applyFloor(
+      highScoreFloor,
+      `transfer value at or above $${largeTransferHighRiskFloorUsd.toLocaleString()}, so final score is floored at ${highScoreFloor}`,
+    );
+  }
+
+  if (hasEddJurisdiction && hasSuspiciousEddCombination) {
+    applyFloor(
+      highScoreFloor,
+      `EDD jurisdiction combined with suspicious activity, so final score is floored at ${highScoreFloor}`,
+    );
   }
 
   return { floor, reasons };
@@ -220,7 +275,7 @@ function scoreFloorFromFactors(factors: RiskFactor[]): { floor: number; reasons:
 function finalizeScore(transaction: TransactionInput, factors: RiskFactor[], structuringAlert?: StructuringAlert): ScoredTransaction {
   const sanctionsHits = screenSanctions(transaction);
   const baseRiskBreakdown = buildBreakdown(factors);
-  const scoreFloor = scoreFloorFromFactors(factors);
+  const scoreFloor = scoreFloorFromFactors(transaction, factors);
   const riskScore = Math.max(baseRiskBreakdown.cappedTotal, scoreFloor.floor);
   const floorExplanation =
     scoreFloor.reasons.length > 0

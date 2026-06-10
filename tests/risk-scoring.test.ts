@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { sampleTransactions } from "@/data/sample-transactions";
 import { scoreTransaction, scoreTransactions } from "@/lib/risk-scoring";
 import type { TransactionInput } from "@/lib/types";
 
@@ -257,4 +258,108 @@ describe("risk scoring", () => {
     expect(scored.riskScore).toBe(100);
     expect(scored.riskBreakdown.jurisdiction).toBe(82);
   });
+
+  it("keeps current sample transactions calibrated to their obvious risk bands", () => {
+    const scored = scoreTransactions(sampleTransactions);
+    const byId = new Map(scored.map((transaction) => [transaction.id, transaction]));
+
+    expect(byId.get("txn_1001")?.riskLevel).toBe("Low");
+    expect(byId.get("txn_1002")?.riskLevel).toBe("Critical");
+    expect(byId.get("txn_1003")?.riskLevel).toBe("High");
+    expect(byId.get("txn_1004")?.riskLevel).toBe("Low");
+    expect(byId.get("txn_1005")?.riskLevel).toBe("Critical");
+  });
+
+  it("floors Russia plus DASH outbound transfers around $35k at critical risk", () => {
+    const scored = scoreTransaction({
+      ...baseTransaction,
+      customerCountry: "RU",
+      asset: "DASH",
+      fiatValueUsd: 35_000,
+      amount: 35_000,
+      direction: "outbound",
+    });
+
+    expect(scored.riskLevel).toBe("Critical");
+    expect(scored.riskScore).toBeGreaterThanOrEqual(90);
+    expect(scored.riskFactors.map((factor) => factor.code)).toEqual(
+      expect.arrayContaining(["CUSTOMER_HIGH_RISK_COUNTRY", "PRIVACY_ASSET"]),
+    );
+    expect(scored.riskBreakdown.calculation).toContain("privacy asset combined with a high-risk/sanctioned jurisdiction");
+    expect(scored.riskBreakdown.calculation).toContain("high-risk jurisdiction outbound transfer at or above $25,000");
+  });
+
+  it.each([
+    ["RU", "XMR"],
+    ["IR", "XMR"],
+    ["SY", "ZEC"],
+    ["KP", "DASH"],
+  ])("floors %s plus %s privacy-asset combinations at critical risk", (country, asset) => {
+    const scored = scoreTransaction({
+      ...baseTransaction,
+      counterpartyCountry: country,
+      asset,
+      fiatValueUsd: 1_000,
+      amount: 1_000,
+    });
+
+    expect(scored.riskLevel).toBe("Critical");
+    expect(scored.riskScore).toBeGreaterThanOrEqual(90);
+    expect(scored.riskBreakdown.calculation).toContain("privacy asset combined with a high-risk/sanctioned jurisdiction");
+  });
+
+  it("floors high-risk outbound transfers of at least $25k at critical risk", () => {
+    const scored = scoreTransaction({
+      ...baseTransaction,
+      counterpartyCountry: "RU",
+      fiatValueUsd: 25_000,
+      amount: 25_000,
+      direction: "outbound",
+    });
+
+    expect(scored.riskLevel).toBe("Critical");
+    expect(scored.riskScore).toBeGreaterThanOrEqual(90);
+    expect(scored.riskBreakdown.calculation).toContain("high-risk jurisdiction outbound transfer at or above $25,000");
+  });
+
+  it("floors high-risk jurisdiction transfers of at least $100k at critical risk", () => {
+    const scored = scoreTransaction({
+      ...baseTransaction,
+      counterpartyCountry: "IR",
+      fiatValueUsd: 100_000,
+      amount: 100_000,
+      direction: "inbound",
+    });
+
+    expect(scored.riskLevel).toBe("Critical");
+    expect(scored.riskScore).toBeGreaterThanOrEqual(90);
+    expect(scored.riskBreakdown.calculation).toContain("high-risk jurisdiction transfer at or above $100,000");
+  });
+
+  it("floors otherwise clean transfers above $500k at high risk", () => {
+    const scored = scoreTransaction({
+      ...baseTransaction,
+      fiatValueUsd: 500_000,
+      amount: 500_000,
+    });
+
+    expect(scored.riskLevel).toBe("High");
+    expect(scored.riskScore).toBeGreaterThanOrEqual(65);
+    expect(scored.riskBreakdown.calculation).toContain("transfer value at or above $500,000");
+  });
+
+  it("floors EDD jurisdictions combined with privacy assets at high risk", () => {
+    const scored = scoreTransaction({
+      ...baseTransaction,
+      counterpartyCountry: "VG",
+      asset: "ZEC",
+      fiatValueUsd: 1_000,
+      amount: 1_000,
+    });
+
+    expect(scored.riskLevel).toBe("High");
+    expect(scored.riskScore).toBeGreaterThanOrEqual(65);
+    expect(scored.riskBreakdown.calculation).toContain("EDD jurisdiction combined with suspicious activity");
+  });
+
 });

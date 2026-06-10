@@ -90,12 +90,12 @@ Milestone 1.7 uses transparent deterministic rules in `lib/risk-scoring.ts`:
 - Structuring/smurfing detection: same wallet and same counterparty in 3 or more transactions within any 7-day window, each below $10,000, where the combined total exceeds $10,000 (+40 points to each transaction in the detected window)
 - Large outbound transfer checks (+20 points at $50,000+)
 - Privacy-asset checks (+22 points)
-- High-risk jurisdiction checks for countries such as North Korea, Iran, Syria, Myanmar, and Cuba (+40 customer / +42 counterparty)
+- High-risk jurisdiction checks for countries such as North Korea, Iran, Syria, Myanmar, Cuba, and Russia (+40 customer / +42 counterparty)
 - Elevated-risk/enhanced due diligence jurisdiction checks (+18 points)
 - Local sanctions/watchlist placeholder hits (+90 points)
 - Local sample sanctions/watchlist placeholder hits only; no live OFAC, UN, EU, UK, or official watchlist lookup is performed
 
-Every screened transaction includes an inline category breakdown for amount, jurisdiction, structuring, direction, watchlist, and other rule contributions. Final scores are capped at 100 and mapped to Low (<35), Medium (35-64), High (65-89), and Critical (90-100).
+Every screened transaction includes an inline category breakdown for amount, jurisdiction, structuring, direction, watchlist, and other rule contributions. Final scores are capped at 100 and mapped to Low (<35), Medium (35-64), High (65-89), and Critical (90-100). Calibration floors keep clear escalation cases from remaining Medium: high-risk jurisdiction plus privacy asset, high-risk outbound transfers at or above $25,000, high-risk jurisdiction transfers at or above $100,000, and severe structuring floor at Critical; transfers at or above $500,000 and EDD jurisdictions combined with suspicious patterns floor at High.
 
 This rules engine is intentionally simple and explainable for founder demos and early customer discovery.
 
