@@ -3,6 +3,8 @@ import { scoreTransactions } from "@/lib/risk-scoring";
 import { scoredTransactionToInsert, rowToPersistentTransaction, type TransactionRow } from "@/lib/persistence";
 import { createClient } from "@/lib/supabase/server";
 import type { TransactionInput } from "@/lib/types";
+import { createDemoTransactions } from "@/lib/demo-data";
+import { isDemoMode } from "@/lib/demo-mode";
 
 async function getOrganizationId(supabase: Awaited<ReturnType<typeof createClient>>, userId: string) {
   const { data, error } = await supabase
@@ -19,6 +21,19 @@ async function getOrganizationId(supabase: Awaited<ReturnType<typeof createClien
 }
 
 export async function POST(request: Request) {
+  if (isDemoMode()) {
+    const body = (await request.json()) as { transactions?: TransactionInput[] };
+    const transactions = body.transactions ?? [];
+    if (!Array.isArray(transactions) || transactions.length === 0) {
+      return NextResponse.json({ error: "No transactions were provided." }, { status: 400 });
+    }
+    const uploadBatchId = `demo-${crypto.randomUUID()}`;
+    return NextResponse.json({
+      uploadBatchId,
+      transactions: createDemoTransactions(transactions, uploadBatchId),
+    });
+  }
+
   const supabase = await createClient();
   const {
     data: { user },

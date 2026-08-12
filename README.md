@@ -57,9 +57,16 @@ cp .env.example .env.local
 | --- | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL for Auth and database access |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anon key used by browser and server SSR clients; RLS controls data access |
+| `NEXT_PUBLIC_DEMO_MODE` | No | Set exactly to `true` to bypass Auth and use only bundled/local browser sample data; false or unset preserves normal Auth |
 | `ANTHROPIC_API_KEY` | No | Future server-only Claude API support |
 
 Do not commit real secrets.
+
+### Temporary public demo mode
+
+Set `NEXT_PUBLIC_DEMO_MODE=true` in the relevant Vercel environment and redeploy. The root, login, and signup routes then redirect to `/dashboard`; middleware does not initialize Supabase; and the dashboard starts with clearly identified sample transactions. CSV screening, review status, and reviewer notes run only in the browser and are stored in `localStorage`. **Reset demo data** clears those browser-local changes.
+
+To restore the existing authenticated product, set `NEXT_PUBLIC_DEMO_MODE=false` (or remove it) and redeploy. Supabase Auth, organization-scoped persistence, and RLS behavior are unchanged. Never use demo mode with real customer data: browser-local demo content is not a durable or shared workspace and is visible to anyone using that browser profile.
 
 ## CSV upload format
 
@@ -133,7 +140,7 @@ npm run build
 The project is Vercel-ready:
 
 1. Import the GitHub repository into Vercel.
-2. Add environment variables from `.env.example` only when enabling Supabase/AI integrations.
+2. Add environment variables from `.env.example`. For a temporary investor deployment set `NEXT_PUBLIC_DEMO_MODE=true`; for the authenticated deployment set it to `false` or omit it.
 3. Deploy the Next.js app.
 
 ## Next recommended milestone
