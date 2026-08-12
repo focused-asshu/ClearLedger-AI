@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardClient } from "@/components/DashboardClient";
 import { scoreTransactions } from "@/lib/risk-scoring";
 import type { PersistentTransaction, TransactionInput } from "@/lib/types";
+import { createDemoTransactions } from "@/lib/demo-data";
 
 vi.mock("@/app/auth/actions", () => ({
   logout: vi.fn(),
@@ -33,6 +34,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   vi.unstubAllGlobals();
 });
 
@@ -76,5 +78,27 @@ describe("dashboard CSV upload feedback", () => {
 
     await waitFor(() => expect(screen.getByText("txn1")).toBeInTheDocument());
     expect(screen.queryByText("txn2")).not.toBeInTheDocument();
+  });
+});
+
+describe("dashboard public demo isolation", () => {
+  it("screens uploads and saves review notes without fetching Supabase APIs", async () => {
+    const fetchMock = vi.mocked(fetch);
+    render(<DashboardClient initialTransactions={createDemoTransactions()} demoMode />);
+
+    expect(screen.getByText("Demo Mode")).toBeInTheDocument();
+    expect(screen.getByText("txn_1001")).toBeInTheDocument();
+
+    const input = screen.getByLabelText(/choose csv file/i);
+    fireEvent.change(input, { target: { files: [new File([`${header}\n${validRow}`], "demo.csv", { type: "text/csv" })] } });
+    await waitFor(() => expect(screen.getByText("txn1")).toBeInTheDocument());
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add note" })[0]);
+    fireEvent.change(screen.getByPlaceholderText("Reviewer note"), { target: { value: "Demo review only" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.getByText("Demo review only")).toBeInTheDocument());
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("clearledger-demo-transactions-v1")).toContain("Demo review only");
   });
 });

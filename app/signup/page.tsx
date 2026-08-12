@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { signup } from "@/app/auth/actions";
+import { isDemoMode } from "@/lib/demo-mode";
+import { redirect } from "next/navigation";
 
 export default async function SignupPage({ searchParams }: { searchParams?: Promise<{ message?: string }> }) {
+  if (isDemoMode()) redirect("/dashboard");
   const params = await searchParams;
   const message = params?.message;
 

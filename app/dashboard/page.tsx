@@ -3,8 +3,14 @@ export const dynamic = "force-dynamic";
 import { DashboardClient } from "@/components/DashboardClient";
 import { rowToPersistentTransaction, type TransactionRow } from "@/lib/persistence";
 import { createClient } from "@/lib/supabase/server";
+import { createDemoTransactions } from "@/lib/demo-data";
+import { isDemoMode } from "@/lib/demo-mode";
 
 export default async function DashboardPage() {
+  if (isDemoMode()) {
+    return <DashboardClient initialTransactions={createDemoTransactions()} demoMode />;
+  }
+
   const supabase = await createClient();
   const {
     data: { user },

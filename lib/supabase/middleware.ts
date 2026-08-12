@@ -3,8 +3,16 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getAuthRedirect } from "@/lib/auth-redirects";
 import type { Database } from "@/lib/database.types";
 import { getSupabaseConfig } from "./config";
+import { isDemoMode } from "@/lib/demo-mode";
 
 export async function updateSession(request: NextRequest) {
+  if (isDemoMode()) {
+    if (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup") {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+    return NextResponse.next({ request });
+  }
+
   const { supabaseUrl, supabaseAnonKey } = getSupabaseConfig();
   let response = NextResponse.next({ request });
 

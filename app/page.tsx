@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { DisclaimerBanner } from "@/components/DisclaimerBanner";
+import { isDemoMode } from "@/lib/demo-mode";
+import { redirect } from "next/navigation";
 
 const features = [
   "CSV transaction upload",
@@ -12,6 +14,8 @@ const features = [
 ];
 
 export default function Home() {
+  if (isDemoMode()) redirect("/dashboard");
+
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,#cffafe,transparent_34%),#f8fafc]">
       <section className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-8 sm:px-6 lg:px-8">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { sampleTransactions } from "@/data/sample-transactions";
 import { DEFAULT_CSV_UPLOAD_LIMITS, parseTransactionsCsvWithDiagnostics } from "@/lib/csv";
 import { generateComplianceReport, transactionsToCsv } from "@/lib/report";
@@ -9,6 +9,9 @@ import { DisclaimerBanner } from "./DisclaimerBanner";
 import { RiskBadge } from "./RiskBadge";
 import { TransactionTable } from "./TransactionTable";
 import { logout } from "@/app/auth/actions";
+import { createDemoTransactions } from "@/lib/demo-data";
+
+const DEMO_STORAGE_KEY = "clearledger-demo-transactions-v1";
 
 const riskLevels: RiskLevel[] = ["Low", "Medium", "High", "Critical"];
 type RiskFilter = RiskLevel | "All";
@@ -26,7 +29,7 @@ function downloadFile(filename: string, content: string, mimeType: string) {
   URL.revokeObjectURL(url);
 }
 
-export function DashboardClient({ initialTransactions = [], userEmail = "" }: { initialTransactions?: PersistentTransaction[]; userEmail?: string }) {
+export function DashboardClient({ initialTransactions = [], userEmail = "", demoMode = false }: { initialTransactions?: PersistentTransaction[]; userEmail?: string; demoMode?: boolean }) {
   const [transactions, setTransactions] = useState<PersistentTransaction[]>(initialTransactions);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("All");
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("All");
@@ -34,6 +37,25 @@ export function DashboardClient({ initialTransactions = [], userEmail = "" }: { 
   const [uploadMessage, setUploadMessage] = useState("No transactions loaded. Upload a CSV or load sample data to begin.");
   const [uploadStatus, setUploadStatus] = useState<"info" | "success" | "error">("info");
   const [uploadRowErrors, setUploadRowErrors] = useState<Array<{ rowNumber: number; field: string; reason: string }>>([]);
+
+  useEffect(() => {
+    if (!demoMode) return;
+    const restoreSavedDemo = window.setTimeout(() => {
+      const saved = window.localStorage.getItem(DEMO_STORAGE_KEY);
+      if (!saved) return;
+      try {
+        setTransactions(JSON.parse(saved) as PersistentTransaction[]);
+      } catch {
+        window.localStorage.removeItem(DEMO_STORAGE_KEY);
+      }
+    }, 0);
+    return () => window.clearTimeout(restoreSavedDemo);
+  }, [demoMode]);
+
+  const updateDemoTransactions = (next: PersistentTransaction[]) => {
+    setTransactions(next);
+    window.localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(next));
+  };
 
   const scoredTransactions = useMemo(() => transactions, [transactions]);
   const report = useMemo(() => generateComplianceReport(scoredTransactions), [scoredTransactions]);
@@ -68,6 +90,17 @@ export function DashboardClient({ initialTransactions = [], userEmail = "" }: { 
   );
 
   const persistScreenedTransactions = async (parsedTransactions: TransactionInput[], sourceName: string) => {
+    if (demoMode) {
+      const demoTransactions = createDemoTransactions(parsedTransactions, `upload-${Date.now()}`);
+      const next = [...demoTransactions, ...transactions].slice(0, 200);
+      updateDemoTransactions(next);
+      setRiskFilter("All");
+      setReviewFilter("All");
+      setUploadStatus("success");
+      setUploadMessage(`${demoTransactions.length} rows screened locally from ${sourceName}. Demo data was not sent to Supabase.`);
+      return;
+    }
+
     const response = await fetch("/api/transactions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -124,6 +157,10 @@ export function DashboardClient({ initialTransactions = [], userEmail = "" }: { 
   };
 
   const handleReviewedChange = async (databaseId: string, reviewed: boolean) => {
+    if (demoMode) {
+      updateDemoTransactions(transactions.map((transaction) => transaction.databaseId === databaseId ? { ...transaction, reviewed } : transaction));
+      return;
+    }
     setTransactions((current) => current.map((transaction) => transaction.databaseId === databaseId ? { ...transaction, reviewed } : transaction));
     const response = await fetch(`/api/transactions/${databaseId}`, {
       method: "PATCH",
@@ -138,6 +175,12 @@ export function DashboardClient({ initialTransactions = [], userEmail = "" }: { 
   };
 
   const handleReviewerNoteSave = async (databaseId: string, reviewerNote: string) => {
+    if (demoMode) {
+      updateDemoTransactions(transactions.map((transaction) => transaction.databaseId === databaseId ? { ...transaction, reviewerNote } : transaction));
+      setUploadStatus("success");
+      setUploadMessage("Review note saved only in this browser's demo storage.");
+      return;
+    }
     const response = await fetch(`/api/transactions/${databaseId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -157,21 +200,25 @@ export function DashboardClient({ initialTransactions = [], userEmail = "" }: { 
       <div className="mx-auto flex max-w-7xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
         <header className="flex flex-col gap-4 rounded-3xl bg-slate-950 p-6 text-white shadow-xl md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300">ClearLedger AI</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300">ClearLedger AI</p>
+              {demoMode ? <span className="rounded-full border border-cyan-300/40 bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-200">Demo Mode</span> : null}
+            </div>
             <h1 className="mt-3 text-3xl font-bold tracking-tight md:text-4xl">Compliance operations dashboard</h1>
             <p className="mt-3 max-w-2xl text-slate-300">
               Upload transaction CSVs or explicitly load sample data, run MVP AML risk rules, review sanctions-placeholder hits, and download founder-demo compliance reports.
             </p>
+            {demoMode ? <p className="mt-3 text-sm font-medium text-cyan-100">You are viewing a demonstration workspace with sample data.</p> : null}
           </div>
           <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/10 p-4 text-sm text-slate-200">
             <div>
               <div className="text-2xl font-bold text-white">{report.flaggedTransactions.length}</div>
               flagged high-risk transactions
             </div>
-            <div className="text-xs text-slate-300">Signed in as {userEmail}</div>
-            <form action={logout}>
+            {!demoMode ? <div className="text-xs text-slate-300">Signed in as {userEmail}</div> : <div className="text-xs text-slate-300">All transactions and reviewer details are local sample data.</div>}
+            {!demoMode ? <form action={logout}>
               <button type="submit" className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-slate-100">Log out</button>
-            </form>
+            </form> : null}
           </div>
         </header>
 
@@ -291,7 +338,7 @@ export function DashboardClient({ initialTransactions = [], userEmail = "" }: { 
                 </button>
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-center text-sm text-slate-600 hover:border-cyan-400 hover:bg-cyan-50">
                   <span className="font-semibold text-slate-800">Choose CSV file</span>
-                  <span>Screens and appends to Supabase history</span>
+                  <span>{demoMode ? "Screens locally in this browser only" : "Screens and appends to Supabase history"}</span>
                   <input
                     type="file"
                     accept=".csv,text/csv"
@@ -358,7 +405,9 @@ export function DashboardClient({ initialTransactions = [], userEmail = "" }: { 
                 <li>Sanctions screening uses local sample data only.</li>
                 <li>Sanctions screening uses local sample placeholder data only; it is not connected to OFAC, UN, EU, UK, or any live sanctions/watchlist source.</li>
                 <li>Authenticated workspaces persist transaction history in Supabase with RLS-scoped organization ownership.</li>
+                {demoMode ? <li>Demo transactions, uploads, review status, and notes remain in local browser storage and never access protected Supabase tables.</li> : null}
               </ul>
+              {demoMode ? <button type="button" onClick={() => { window.localStorage.removeItem(DEMO_STORAGE_KEY); setTransactions(initialTransactions); setUploadMessage("Demo data reset to the original sample dataset."); setUploadStatus("success"); }} className="mt-4 rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Reset demo data</button> : null}
             </div>
           </aside>
         </section>
